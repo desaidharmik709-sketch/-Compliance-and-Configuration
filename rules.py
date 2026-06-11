@@ -130,12 +130,25 @@ def successful_logins_check():
     }
 
 
+
 def firewall_enabled():
+
     data = load_latest("10_firewall_configuration")
 
-    text = str(data.get("stdout", "")).upper()
+    items = safe_parse_json(data.get("stdout"))
 
-    enabled_profiles = text.count("STATE                                 ON")
+    if not items:
+        return {
+            "status": False,
+            "evidence": "No firewall telemetry"
+        }
+
+    enabled_profiles = 0
+
+    for profile in items:
+
+        if profile.get("Enabled") is True:
+            enabled_profiles += 1
 
     return {
         "status": enabled_profiles == 3,
@@ -143,18 +156,37 @@ def firewall_enabled():
     }
 
 
-def registry_autoruns_check():
-    data = load_latest("12_registry_autoruns")
-    run_out = data.get("run", {}).get("stdout", "").lower()
-    runonce_out = data.get("runonce", {}).get("stdout", "").lower()
 
-    suspicious = ["appdata\\", "temp\\"]
-    found = [x for x in suspicious if x in run_out + runonce_out]
+
+def registry_autoruns_check():
+
+    data = load_latest("12_registry_autoruns")
+
+    suspicious = [
+        "appdata\\",
+        "temp\\",
+        "powershell",
+        "wscript",
+        "cscript"
+    ]
+
+    combined_text = json.dumps(data).lower()
+
+    found = []
+
+    for item in suspicious:
+
+        if item in combined_text:
+            found.append(item)
 
     return {
         "status": len(found) == 0,
-        "evidence": "Clean" if not found else f"Suspicious: {', '.join(found)}"
+        "evidence":
+            "Clean autorun locations"
+            if not found
+            else f"Suspicious autoruns: {', '.join(found)}"
     }
+
 
 
 def scheduled_tasks_check():
@@ -208,53 +240,152 @@ def defender_enabled():
 
 
 def boot_shutdown_check():
+
     data = load_latest("20_boot_shutdown_events")
 
-    text = data.get("stdout", "")
+    items = safe_parse_json(data.get("stdout"))
 
-    boots = text.count("6005")
-    shutdowns = text.count("6006")
+    boots = 0
+    shutdowns = 0
+
+    for event in items:
+
+        event_id = str(event.get("Id", ""))
+
+        if event_id == "6005":
+            boots += 1
+
+        elif event_id == "6006":
+            shutdowns += 1
 
     return {
         "status": boots > 0,
-        "evidence": f"{boots} boots and {shutdowns} shutdown events"
+        "evidence":
+            f"{boots} boots and {shutdowns} shutdown events"
     }
+
 
 
 def audit_policy_check():
-    data = load_latest("21_audit_policy_configuration")
-    text = data.get("stdout", "")
 
-    required = ["logon", "logoff", "policy"]
-    missing = [r for r in required if r.lower() not in text.lower()]
+    data = load_latest("21_audit_policy_configuration")
+
+    items = safe_parse_json(data.get("stdout"))
+
+    required = [
+        "logon",
+        "logoff",
+        "policy"
+    ]
+
+    combined = ""
+
+    for item in items:
+
+        combined += " "
+
+        combined += str(
+            item.get("Subcategory", "")
+        ).lower()
+
+        combined += " "
+
+        combined += str(
+            item.get("Setting", "")
+        ).lower()
+
+    missing = []
+
+    for r in required:
+
+        if r not in combined:
+            missing.append(r)
 
     return {
         "status": len(missing) == 0,
-        "evidence": "OK" if not missing else f"Missing: {', '.join(missing)}"
+        "evidence":
+            "Audit policies detected"
+            if not missing
+            else f"Missing: {', '.join(missing)}"
     }
-
 
 def drivers_inventory_check():
+
     data = load_latest("22_drivers_inventory")
 
-    lines = data.get("stdout", "").splitlines()
+    items = safe_parse_json(data.get("stdout"))
 
-    count = len(lines)
+    if not items:
+        return {
+            "status": False,
+            "evidence": "No driver inventory"
+        }
+
+    important_keywords = [
+        "bluetooth",
+        "usb",
+        "wireless",
+        "audio",
+        "realtek",
+        "intel",
+        "nvidia",
+        "pci"
+    ]
+
+    important = []
+
+    for driver in items:
+
+        device_name = str(
+            driver.get("DeviceName", "")
+        ).lower()
+
+        for keyword in important_keywords:
+
+            if keyword in device_name:
+                important.append(device_name)
+                break
 
     return {
-        "status": count > 5,
-        "evidence": f"{count} driver entries discovered"
+        "status": len(items) > 10,
+        "evidence":
+            f"{len(items)} drivers discovered, "
+            f"{len(important)} critical drivers identified"
     }
-
 
 def more_windows_settings_check():
+
     data = load_latest("23_more_windows_settings")
-    uac = data.get("uac_level", {}).get("stdout", "")
+
+    defender = json.dumps(
+        data.get("windows_defender", {})
+    ).lower()
+
+    firewall = json.dumps(
+        data.get("firewall_profiles", {})
+    ).lower()
+
+    secure_boot = json.dumps(
+        data.get("secure_boot", {})
+    ).lower()
+
+    checks = 0
+
+    if "true" in defender:
+        checks += 1
+
+    if "enabled" in firewall or "true" in firewall:
+        checks += 1
+
+    if "true" in secure_boot:
+        checks += 1
 
     return {
-        "status": "0x5" in uac or "0x2" in uac,
-        "evidence": "UAC checked"
+        "status": checks >= 2,
+        "evidence":
+            f"{checks}/3 core security settings validated"
     }
+
 
 
 def usb_direct_connection_check():
