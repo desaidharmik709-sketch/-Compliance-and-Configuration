@@ -1,14 +1,35 @@
+
 import json
 import time
 from pathlib import Path
 from kafka import KafkaProducer
 
 producer = KafkaProducer(
-    bootstrap_servers='localhost:9092',
-    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    bootstrap_servers="localhost:9092",
+    value_serializer=lambda v: json.dumps(v).encode("utf-8")
 )
 
 OUTPUT_DIR = Path("compliance_output")
+
+
+def normalize_stdout(stdout):
+
+    if stdout is None:
+        return []
+
+    if isinstance(stdout, list):
+        return stdout
+
+    if isinstance(stdout, dict):
+        return [stdout]
+
+    if isinstance(stdout, str):
+        return [{
+            "raw_output": stdout
+        }]
+
+    return []
+
 
 for file in sorted(OUTPUT_DIR.glob("*.json")):
 
@@ -24,37 +45,53 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
 
             collection_time = obj.get(
                 "collection_time",
-                ""
+                {}
             )
 
-            payloads = []
+            username = obj.get(
+                "username",
+                "unknown"
+            )
 
-            if (
-                isinstance(
-                    obj.get("data", {}).get("stdout"),
-                    list
-                )
-            ):
+            hostname = obj.get(
+                "hostname",
+                "unknown"
+            )
 
-                for record in obj["data"]["stdout"]:
+            telemetry = obj.get(
+                "data",
+                {}
+            )
 
-                    payloads.append({
-                        "file_name": file.name,
-                        "collection_time": collection_time,
-                        "record": record
-                    })
+            stdout = telemetry.get(
+                "stdout",
+                []
+            )
 
-            else:
+            normalized_records = normalize_stdout(stdout)
 
-                payloads.append({
+            if not normalized_records:
+
+                normalized_records = [{
+                    "message": "No stdout records"
+                }]
+
+            total = len(normalized_records)
+
+            for idx, record in enumerate(normalized_records, start=1):
+
+                payload = {
+
                     "file_name": file.name,
+
                     "collection_time": collection_time,
-                    "record": obj
-                })
 
-            total = len(payloads)
+                    "username": username,
 
-            for idx, payload in enumerate(payloads, start=1):
+                    "hostname": hostname,
+
+                    "record": record
+                }
 
                 producer.send(
                     "compliance-data",
@@ -69,7 +106,7 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
 
                 producer.flush()
 
-                time.sleep(0.05)
+                time.sleep(0.03)
 
     except Exception as e:
 
