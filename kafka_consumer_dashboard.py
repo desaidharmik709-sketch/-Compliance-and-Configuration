@@ -1,33 +1,75 @@
+
 import json
+
 from kafka import KafkaConsumer
+
 from collections import defaultdict
+
 from pathlib import Path
 
+from datetime import datetime
+
+
 consumer = KafkaConsumer(
+
     "compliance-data",
+
     bootstrap_servers="localhost:9092",
+
     auto_offset_reset="earliest",
-    value_deserializer=lambda x: json.loads(x.decode("utf-8"))
+
+    value_deserializer=lambda x: json.loads(
+        x.decode("utf-8")
+    )
 )
+
 
 dashboard_file = Path("dashboard.html")
 
-# file wise storage
+
 file_logs = defaultdict(list)
 
+
 print("Listening for Kafka messages...")
+
+
+def extract_timestamp(log):
+
+    collection = log.get(
+        "collection_time",
+        {}
+    )
+
+    if isinstance(collection, dict):
+
+        return collection.get(
+            "full",
+            "01-01-1970 12:00:00 AM"
+        )
+
+    return str(collection)
+
 
 for message in consumer:
 
     data = message.value
 
-    file_name = data["file_name"]
+    file_name = data.get(
+        "file_name",
+        "unknown"
+    )
 
-    file_logs[file_name].insert(0, data)
+    file_logs[file_name].insert(
+        0,
+        data
+    )
 
     html = f"""
+
     <html>
+
     <head>
+
     <title>Compliance Dashboard</title>
 
     <style>
@@ -114,57 +156,70 @@ for message in consumer:
 
     <div class="container">
 
-        <div class="left">
+    <div class="left">
 
-            <h2>File Wise Logs</h2>
+    <h2>File Wise Logs</h2>
+
     """
 
-    # LEFT SIDE
     for fname, logs in file_logs.items():
 
         html += f"""
+
         <details>
 
-            <summary>
-                {fname} ({len(logs)} logs)
-            </summary>
+        <summary>
+
+        {fname} ({len(logs)} logs)
+
+        </summary>
+
         """
 
         for log in logs:
 
             pretty = json.dumps(
                 log,
-                indent=2
+                indent=2,
+                ensure_ascii=False
             )
 
             html += f"""
+
             <div class="logcard">
 
-                <pre>{pretty}</pre>
+            <pre>{pretty}</pre>
 
             </div>
+
             """
 
         html += "</details>"
 
     html += """
-        </div>
 
-        <div class="right">
+    </div>
 
-            <h2>Latest Logs (Newest First)</h2>
+    <div class="right">
 
-            <table>
+    <h2>Latest Logs (Newest First)</h2>
 
-                <tr>
+    <table>
 
-                    <th>File</th>
-                    <th>Collection Time</th>
+    <tr>
 
-                </tr>
+    <th>File</th>
+
+    <th>Collection Time</th>
+
+    <th>Username</th>
+
+    <th>Hostname</th>
+
+    </tr>
+
     """
 
-    # ALL LOGS MERGE
     all_logs = []
 
     for fname, logs in file_logs.items():
@@ -175,44 +230,67 @@ for message in consumer:
                 (fname, log)
             )
 
-    # latest top
     all_logs.sort(
-        key=lambda x: x[1].get(
-            "collection_time",
-            ""
+
+        key=lambda x: datetime.strptime(
+
+            extract_timestamp(x[1]),
+
+            "%d-%m-%Y %I:%M:%S %p"
+
         ),
+
         reverse=True
     )
 
     for fname, log in all_logs:
 
+        timestamp = extract_timestamp(log)
+
+        username = log.get(
+            "username",
+            "unknown"
+        )
+
+        hostname = log.get(
+            "hostname",
+            "unknown"
+        )
+
         html += f"""
+
         <tr>
 
-            <td>{fname}</td>
+        <td>{fname}</td>
 
-            <td>
-                {log.get("collection_time","")}
-            </td>
+        <td>{timestamp}</td>
+
+        <td>{username}</td>
+
+        <td>{hostname}</td>
 
         </tr>
+
         """
 
     html += """
 
-            </table>
+    </table>
 
-        </div>
+    </div>
 
     </div>
 
     </body>
 
     </html>
+
     """
 
     dashboard_file.write_text(
+
         html,
+
         encoding="utf-8"
     )
 
