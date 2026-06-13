@@ -333,96 +333,10 @@ def usb_setting_history_check():
         "evidence": "USB registry checked"
     }
     
-def corr_01_software_services_native():
-    """Native Correlation 1: Maps installed software to actively running Windows Services."""
-    sw_data = load_latest("01_installed_software")
-    sw_items = safe_parse_json(sw_data.get("stdout", ""))
-    
-    svc_data = load_latest("05_windows_services")
-    svc_items = safe_parse_json(svc_data.get("stdout", ""))
 
-    # Extract base names of installed software
-    installed_apps = [str(app.get("DisplayName", "")).strip() for app in sw_items if app.get("DisplayName")]
-    
-    # Extract base names of running services
-    running_services = [str(svc.get("DisplayName", "")).strip() for svc in svc_items if svc.get("DisplayName")]
-
-    # Find the real overlap: Which installed apps are running as services right now?
-    active_software_services = []
-    for app in installed_apps:
-        # Check if the primary app name exists within the running services list
-        if any(app.lower() in svc.lower() for svc in running_services):
-            active_software_services.append(app)
-
-    # Deduplicate the list
-    active_software_services = list(set(active_software_services))
-
-    export_metric_to_json("Native_Software_to_Services_Correlation", {
-        "total_software_installed": len(installed_apps),
-        "total_services_running": len(running_services),
-        "software_running_as_services_count": len(active_software_services),
-        "active_software_services_list": active_software_services[:10] # Show up to 10 real examples
-    })
-
-    return {
-        "status": True,
-        "evidence": f"Mapped {len(active_software_services)} installed applications directly to running Windows services."
-    }
-
-
-def corr_02_persistence_overlap_native():
-    """Native Correlation 2: Cross-references Scheduled Tasks and Autoruns for overlapping persistence."""
-    tasks_data = load_latest("13_scheduled_tasks")
-    tasks_items = safe_parse_json(tasks_data.get("stdout", ""))
-    
-    auto_data = load_latest("12_registry_autoruns")
-    
-    # --- UPDATED FOR TEAM 8'S NEW COLLECTOR KEYS ---
-    run_1 = str(auto_data.get("current_version_run", {}).get("stdout", "")).lower()
-    run_2 = str(auto_data.get("current_version_runonce", {}).get("stdout", "")).lower()
-    run_3 = str(auto_data.get("wow6432node_run", {}).get("stdout", "")).lower()
-    run_4 = str(auto_data.get("user_run", {}).get("stdout", "")).lower()
-    
-    combined_autoruns = run_1 + run_2 + run_3 + run_4
-
-    # Extract Task Names instead of executables
-    task_names = []
-    for task in tasks_items:
-        name = str(task.get("TaskName", "")).lower().strip()
-        if name and len(name) > 4: # Ignore extremely short/generic names
-            task_names.append(name)
-
-    # Find which of those Task Names ALSO exist anywhere in the newly expanded Registry Autoruns
-    multi_layer_persistence = []
-    for name in set(task_names):
-        if name in combined_autoruns:
-            multi_layer_persistence.append(name)
-
-    export_metric_to_json("Native_Persistence_Overlap_Correlation", {
-        "total_scheduled_tasks": len(tasks_items),
-        "tasks_analyzed_for_overlap": len(set(task_names)),
-        "multi_layer_persistence_count": len(multi_layer_persistence),
-        "overlapping_persistence_names": multi_layer_persistence
-    })
-
-    return {
-        "status": True,
-        "evidence": f"Found {len(multi_layer_persistence)} items utilizing multi-layered persistence (Tasks + Autoruns)."
-    }
     
 RULES = [
-    {
-        "id": "T10-CORR-01",
-        "framework": "SYSTEM",
-        "control": "Software to Service Vulnerability Mapping",
-        "datapoint": "t10_corr_01"
-    },
-    {
-        "id": "T10-CORR-02",
-        "framework": "SYSTEM",
-        "control": "Persistence Threat Intel Enrichment",
-        "datapoint": "t10_corr_02"
-    },
+    
     {
         "id": "DP-001",
         "framework": "SYSTEM",
