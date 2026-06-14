@@ -48,21 +48,53 @@ Dashboard Integration
 <h3>Project Structure<h3>
 <img width="888" height="573" alt="image" src="https://github.com/user-attachments/assets/ab049815-9693-403a-9c02-fa4c401e5e05" />
 
-Execution
-Start Kafka
-kafka-server-start.bat config\server.properties
-Run Compliance Collection
-run_compliance.bat
-Verify Topic
-kafka-topics.bat --bootstrap-server localhost:9092 --list
-Output
+<h3>Sample log file:-<h3>
+  
+{
 
+  "timestamp": "2025-06-14T10:16:28Z",
+  
+  "level": "INFO",
+  
+  "module": "report",
+  
+  "action": "generate_report",
+  
+  "status": "SUCCESS",
+  
+  "report_name": "final_report_2025-06-14_101628.json",
+  
+  "execution_time_ms": 1240
+  
+}
+<img width="691" height="413" alt="image" src="https://github.com/user-attachments/assets/c5fe76c2-b49b-4aa6-8f3a-5998c3be8acd" />
+
+
+<h3>Execution<h3>
+
+Start Kafka
+
+kafka-server-start.bat config\server.properties
+
+Run Compliance Collection
+
+run_compliance.bat
+
+Verify Topic
+
+kafka-topics.bat --bootstrap-server localhost:9092 --list
+
+<h3>Output<h3>
 The module generates:
 
 Compliance Assessment Results
+
 Compliance Scores
+
 Dashboard JSON Data
+
 Security Findings
+
 Compliance Reports
 <img width="1801" height="856" alt="image" src="https://github.com/user-attachments/assets/69166faf-9c46-4fc3-902a-68c9b69d7e4b" />
 <img width="1201" height="720" alt="image" src="https://github.com/user-attachments/assets/040ba0d2-23fc-462f-add0-00436da448e5" />
