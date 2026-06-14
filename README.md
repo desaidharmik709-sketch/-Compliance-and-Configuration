@@ -96,8 +96,8 @@ Dashboard JSON Data
 Security Findings
 
 Compliance Reports
-<img width="1801" height="856" alt="image" src="https://github.com/user-attachments/assets/69166faf-9c46-4fc3-902a-68c9b69d7e4b" />
-<img width="1201" height="720" alt="image" src="https://github.com/user-attachments/assets/040ba0d2-23fc-462f-add0-00436da448e5" />
+<img width="1600" height="694" alt="WhatsApp Image 2026-06-14 at 23 31 11" src="https://github.com/user-attachments/assets/8a197df9-ff2f-40e5-9b7c-249fc8347342" />
 
+<img width="1642" height="721" alt="image" src="https://github.com/user-attachments/assets/fb214073-53f2-44cf-9386-9a20e262c080" />
 
 
