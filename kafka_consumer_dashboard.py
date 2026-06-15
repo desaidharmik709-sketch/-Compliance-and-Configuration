@@ -1,5 +1,4 @@
 import json
-import time
 from kafka import KafkaConsumer
 from collections import defaultdict
 from pathlib import Path
@@ -20,10 +19,7 @@ dashboard_file = Path("dashboard.html")
 file_logs = defaultdict(list)
 latest_events = []
 
-MAX_FILE_LOGS = 50
-MAX_LATEST_EVENTS = 500
-
-print("Listening for Kafka messages...")
+print("Listening for Kafka messages... (All history will be kept)")
 
 # =========================
 # EVENT SUMMARY
@@ -56,7 +52,6 @@ def render_dashboard():
     total_logs = sum(len(v) for v in file_logs.values())
     total_files = len(file_logs)
 
-    # Base HTML template structure matching your original dashboard layout styling
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -131,7 +126,6 @@ def render_dashboard():
                     <tr>
                         <th>File</th>
                         <th>Date & Time</th>
-                        <th>Host</th>
                         <th>Event</th>
                     </tr>
                 </thead>
@@ -145,7 +139,6 @@ def render_dashboard():
                     <tr>
                         <td>{log.get('file_name', 'unknown')}</td>
                         <td>{log.get('timestamp', 'N/A')}</td>
-                        <td>{log.get('hostname', 'None')}</td>
                         <td>{summary}</td>
                     </tr>
         """
@@ -168,25 +161,20 @@ for message in consumer:
     data = message.value
 
     file_name = data.get("file_name", "unknown")
-    
-    # Try parsing internal timestamp metrics, default to runtime generation if missing
     inner_record = data.get("record", {})
-    if isinstance(inner_record, dict) and "TimeCreated" in inner_record:
-        raw_time = inner_record.get("TimeCreated") or ""
+
+    # Extract time values dynamically if available, otherwise apply a backup timestamp
+    if isinstance(inner_record, dict) and "TimeCreated" in inner_record and inner_record.get("TimeCreated"):
+        raw_time = str(inner_record.get("TimeCreated"))
         data["timestamp"] = raw_time.replace("T", " ").split(".")[0]
     elif isinstance(inner_record, dict) and "TimeDetected" in inner_record and inner_record.get("TimeDetected"):
         data["timestamp"] = str(inner_record.get("TimeDetected"))
     elif "timestamp" not in data:
         data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Insert log history payload arrays
+    # Add items to memory collections without running size truncation checks
     file_logs[file_name].insert(0, data)
-    if len(file_logs[file_name]) > MAX_FILE_LOGS:
-        file_logs[file_name].pop()
-
     latest_events.insert(0, data)
-    if len(latest_events) > MAX_LATEST_EVENTS:
-        latest_events.pop()
 
     render_dashboard()
     print(f"[RECEIVED] {file_name}")
