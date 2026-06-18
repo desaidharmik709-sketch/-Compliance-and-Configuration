@@ -1,3 +1,32 @@
+import selectors
+from selectors import SelectorKey
+
+# Workaround for selectors.py raising ValueError instead of KeyError on Python 3.12+ (e.g. invalid file descriptors)
+# We apply the patch to both BaseSelector and _BaseSelectorImpl to handle subclasses overriding unregister.
+for selector_cls in [selectors.BaseSelector, getattr(selectors, "_BaseSelectorImpl", None)]:
+    if selector_cls is not None and hasattr(selector_cls, "unregister"):
+        _orig_unregister = selector_cls.unregister
+        def make_safe_unregister(orig_unreg):
+            def _safe_unregister(self, fileobj):
+                try:
+                    return orig_unreg(self, fileobj)
+                except (ValueError, KeyError):
+                    # If it failed (e.g., closed socket with fd=-1), search for it by object identity in registered keys
+                    found_fd = None
+                    if hasattr(self, "_fd_to_key"):
+                        for fd, key in list(self._fd_to_key.items()):
+                            if key.fileobj is fileobj:
+                                found_fd = fd
+                                break
+                    if found_fd is not None:
+                        try:
+                            return orig_unreg(self, found_fd)
+                        except (ValueError, KeyError):
+                            pass
+                    # Fallback if not found: return a dummy SelectorKey to prevent unhandled KeyError crashes in kafka-python
+                    return SelectorKey(fileobj, -1, 0, None)
+            return _safe_unregister
+        selector_cls.unregister = make_safe_unregister(_orig_unregister)
 
 import json
 import time
@@ -43,24 +72,39 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
 
         for obj in content:
 
-            collection_time = obj.get(
-                "collection_time",
+            fingerprint = obj.get(
+                "device_fingerprint",
                 {}
             )
 
-            username = obj.get(
+            payload_message = obj.get(
+                "payload_message",
+                {}
+            )
+
+            collection_metadata = payload_message.get(
+                "collection_metadata",
+                {}
+            )
+
+            telemetry = payload_message.get(
+                "data",
+                {}
+            )
+
+            username = collection_metadata.get(
                 "username",
                 "unknown"
             )
 
-            hostname = obj.get(
-                "hostname",
+            hostname = fingerprint.get(
+                "device_name",
                 "unknown"
             )
 
-            telemetry = obj.get(
-                "data",
-                {}
+            timestamp = obj.get(
+                "timestamp",
+                ""
             )
 
             stdout = telemetry.get(
@@ -78,24 +122,26 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
 
             total = len(normalized_records)
 
-            for idx, record in enumerate(normalized_records, start=1):
+            for idx, record in enumerate(
+                normalized_records,
+                start=1
+            ):
 
-                payload = {
-
+                kafka_payload = {
                     "file_name": file.name,
-
-                    "collection_time": collection_time,
-
+                    "event_id": obj.get("event_id", ""),
+                    "event_type": obj.get("event_type", ""),
+                    "severity": obj.get("severity", "INFO"),
+                    "timestamp": timestamp,
                     "username": username,
-
                     "hostname": hostname,
-
+                    "device_fingerprint": fingerprint,
                     "record": record
                 }
 
                 producer.send(
                     "compliance-data",
-                    value=payload
+                    value=kafka_payload
                 )
 
                 print(
