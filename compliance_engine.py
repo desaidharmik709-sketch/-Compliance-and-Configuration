@@ -1,8 +1,14 @@
+"""
+Throttled Assessment Core Router
+Maintains strict low-overhead consumption limits (<10% CPU, minimal active RAM footprint)
+"""
+
 import json
 import time
+import gc  # Force explicit Garbage Collection to release memory buffers instantly
 from rules import (
     RULES,
-    corr_01_software_services,          
+    corr_01_software_services,         
     corr_02_persistence_threat_intel,
     installed_software_check,
     hardware_inventory_check,
@@ -50,8 +56,9 @@ CHECKS = {
 def evaluate():
     findings = []
     for rule in RULES:
-        # Prevent continuous loop processing from generating short processing spikes
-        time.sleep(0.1)
+        # Pacing delay ensures execution remains inside the 5-10% CPU baseline
+        time.sleep(0.3)
+        
         datapoint = rule["datapoint"]
         if datapoint not in CHECKS:
             findings.append({
@@ -79,6 +86,10 @@ def evaluate():
                 "status": "ERROR",
                 "evidence": str(e)
             })
+        
+        # Free memory variables inside iteration loop to avoid allocation build-ups
+        gc.collect()
+
     print(f"[*] Evaluation completed for {len(findings)} technical checks.")
     return findings
 
