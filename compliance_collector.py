@@ -98,9 +98,19 @@ def parse_maybe_json(text):
     except json.JSONDecodeError:
         return text
 
+def remove_timestamp(obj):
+    if isinstance(obj, dict):
+        return {k: remove_timestamp(v) for k, v in obj.items() if k != "timestamp"}
+    elif isinstance(obj, list):
+        return [remove_timestamp(elem) for elem in obj]
+    else:
+        return obj
+
+
 def generate_data_hash(data):
     try:
-        normalized = json.dumps(data, sort_keys=True, default=str)
+        cleaned_data = remove_timestamp(data)
+        normalized = json.dumps(cleaned_data, sort_keys=True, default=str)
         return hashlib.sha256(normalized.encode()).hexdigest()
     except Exception:
         return "HASH_ERROR"
@@ -177,22 +187,15 @@ def save_json(name, data, event_id="COMP-GENERIC", severity="INFO", event_type="
         except Exception:
             existing_data = []
 
-    replace_index = None
+    active_index = None
 
     for i, old_entry in enumerate(existing_data):
-
-        old_hash = old_entry.get("data_hash")
-
-        old_severity = old_entry.get(
-            "severity",
-            "INFO"
-        )
-
-        if (
-            old_hash == data_hash
-            and old_severity == severity
-        ):
-            replace_index = i
+        old_severity = old_entry.get("severity", "INFO")
+        old_event_id = str(old_entry.get("event_id", ""))
+        
+        # An entry is active if it has the matching severity and is not archived (doesn't start with "Previous")
+        if old_severity == severity and not old_event_id.startswith("Previous"):
+            active_index = i
             break
 
     new_entry = {
@@ -212,21 +215,46 @@ def save_json(name, data, event_id="COMP-GENERIC", severity="INFO", event_type="
         }
     }
 
-    if replace_index is not None:
+    if active_index is not None:
+        active_entry = existing_data[active_index]
+        old_hash = active_entry.get("data_hash")
 
-        existing_data[replace_index] = new_entry
+        # Fallback: support backward compatibility with legacy entries by computing timestamp-free hash
+        if old_hash != data_hash:
+            old_data = active_entry.get("payload_message", {}).get("data")
+            if old_data is not None:
+                legacy_hash = generate_data_hash(old_data)
+                if legacy_hash == data_hash:
+                    old_hash = legacy_hash
 
-        print(
-            f"[UPDATED] {name} -> Existing entry replaced."
-        )
-
+        if old_hash == data_hash:
+            # Same data, same severity -> Replace active entry in place
+            existing_data[active_index] = new_entry
+            print(f"[UPDATED] {name} -> Existing active entry replaced.")
+        else:
+            # Different data, same severity -> Archive the old active entry and append the new entry
+            max_num = 0
+            for entry in existing_data:
+                eid = str(entry.get("event_id", ""))
+                if eid.startswith("Previous"):
+                    try:
+                        num = int(eid[8:])
+                        if num > max_num:
+                            max_num = num
+                    except ValueError:
+                        pass
+            next_previous_id = f"Previous{max_num + 1:03d}"
+            
+            # Archive the old active entry
+            active_entry["event_id"] = next_previous_id
+            
+            # Append the new active entry
+            existing_data.append(new_entry)
+            print(f"[ARCHIVED] {name} -> Previous active entry archived as {next_previous_id}. New entry appended.")
     else:
-
+        # No existing active entry for this severity -> Append the new entry
         existing_data.append(new_entry)
-
-        print(
-            f"[NEW] {name} -> New entry appended."
-        )
+        print(f"[NEW] {name} -> New active entry appended.")
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(existing_data, f, indent=4, ensure_ascii=False)
@@ -255,10 +283,10 @@ def windows_services():
     return run_ps("Get-Service | Where-Object {$_.Status -eq 'Running'} | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 2")
 
 def failed_logins():
-    return run_ps("Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625} -MaxEvents 100 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id | ConvertTo-Json")
+    return run_ps("Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id | ConvertTo-Json")
 
 def successful_logins():
-    return run_ps("Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4624} -MaxEvents 15 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id | ConvertTo-Json")
+    return run_ps("Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4624} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id | ConvertTo-Json")
 
 def firewall_config():
     return run_ps(r"""
@@ -303,7 +331,7 @@ def boot_shutdown():
 Get-WinEvent -FilterHashtable @{
     LogName='System'
     ID=6005,6006
-} -MaxEvents 20 |
+} |
 Select-Object TimeCreated, Id, ProviderName, MachineName |
 ConvertTo-Json -Depth 3
 """)
@@ -470,62 +498,62 @@ def main():
 
         data = func()
 
-    # Software reputation check
-    if name == "01_installed_software":
+        # Software reputation check
+        if name == "01_installed_software":
 
-        suspicious_apps = analyse_software(data)
+            suspicious_apps = analyse_software(data)
 
-        if suspicious_apps:
+            if suspicious_apps:
 
-            print("\n" + "=" * 70)
-            print("[ALERT] Suspicious Software Detected")
-            print("=" * 70)
+                print("\n" + "=" * 70)
+                print("[ALERT] Suspicious Software Detected")
+                print("=" * 70)
 
-            for app in suspicious_apps:
+                for app in suspicious_apps:
 
-                print(f"Application : {app['application']}")
-                print(f"Version     : {app['version']}")
-                print(f"Severity    : {app['severity']}")
-                print("-" * 70)
+                    print(f"Application : {app['application']}")
+                    print(f"Version     : {app['version']}")
+                    print(f"Severity    : {app['severity']}")
+                    print("-" * 70)
 
-    # Blueprint severity classification
-    if name == "06_failed_logins":
-        severity_level = "CRITICAL"
-        event_type_label = "Failed Login Monitoring"
+        # Blueprint severity classification
+        if name == "06_failed_logins":
+            severity_level = "CRITICAL"
+            event_type_label = "Failed Login Monitoring"
 
-    elif name == "26_windows_scan_history":
-        severity_level = "CRITICAL"
-        event_type_label = "Threat Detection"
+        elif name == "26_windows_scan_history":
+            severity_level = "CRITICAL"
+            event_type_label = "Threat Detection"
 
-    elif name in [
-        "10_firewall_configuration",
-        "12_registry_autoruns",
-        "13_scheduled_tasks",
-        "17_windows_defender_status",
-        "23_more_windows_settings",
-        "27_usb_setting_history"
-    ]:
-        severity_level = "INVESTIGATIVE"
-        event_type_label = "Security Investigation"
+        elif name in [
+            "10_firewall_configuration",
+            "12_registry_autoruns",
+            "13_scheduled_tasks",
+            "17_windows_defender_status",
+            "23_more_windows_settings",
+            "27_usb_setting_history"
+        ]:
+            severity_level = "INVESTIGATIVE"
+            event_type_label = "Security Investigation"
 
-    elif name == "20_boot_shutdown_events":
-        severity_level = "STATISTICS"
-        event_type_label = "System Availability Metrics"
+        elif name == "20_boot_shutdown_events":
+            severity_level = "STATISTICS"
+            event_type_label = "System Availability Metrics"
 
-    else:
-        severity_level = "INFO"
-        event_type_label = "Compliance Metric Collection"
+        else:
+            severity_level = "INFO"
+            event_type_label = "Compliance Metric Collection"
 
-    save_json(
-        name,
-        data,
-        severity=severity_level,
-        event_type=event_type_label
-    )
+        save_json(
+            name,
+            data,
+            severity=severity_level,
+            event_type=event_type_label
+        )
 
-    master["payload_message"]["files"].append(f"{name}.json")
+        master["payload_message"]["files"].append(f"{name}.json")
 
-    time.sleep(0.2)
+        time.sleep(0.2)
     
 
     # -------------------------------
