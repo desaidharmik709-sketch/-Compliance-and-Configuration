@@ -34,6 +34,7 @@ import gc
 from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
+import psutil
 from kafka import KafkaConsumer
 
 # Create reports directory if missing
@@ -57,7 +58,7 @@ def write_static_html():
     html_content = """<!DOCTYPE html>
 <html>
 <head>
-    <title>Compliance & Configuration Posture Team 08</title>
+    <title>Compliance & Configuration Posture</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -804,7 +805,7 @@ def write_static_html():
         </div>
 
         <div class="header-container">
-            <h1>Compliance & Configuration Posture Team 08</h1>
+            <h1>Compliance & Configuration Posture</h1>
             <div class="status-panel">
                 <div class="status-item">
                     <span id="consumer-dot" class="status-dot idle"></span>
@@ -819,6 +820,12 @@ def write_static_html():
                 <div class="status-item clock">
                     <span class="status-label">Local Time:</span>
                     <span class="status-val" id="live-clock">--:--:--</span>
+                </div>
+                <div class="status-item clock" style="padding-left: 20px;">
+                    <span class="status-label">CPU:</span>
+                    <span class="status-val" id="sys-cpu" style="color: #38bdf8;">--%</span>
+                    <span class="status-label" style="margin-left: 10px;">RAM:</span>
+                    <span class="status-val" id="sys-ram" style="color: #a855f7;">--%</span>
                 </div>
             </div>
         </div>
@@ -994,6 +1001,12 @@ def write_static_html():
         let currentFrameworkFilter = 'ALL';
         window.allEvents = [];
         window.latestReportData = {};
+        window.maxDisplayedRows = 100;
+        
+        window.loadMoreLogs = function() {
+            window.maxDisplayedRows += 100;
+            renderEventTable();
+        };
 
         function filterFramework(fw) {
             currentFrameworkFilter = fw;
@@ -1245,7 +1258,11 @@ def write_static_html():
             if (!tbody || !window.allEvents) return;
 
             let rowsHTML = '';
+            let renderedCount = 0;
+
             window.allEvents.forEach((log, index) => {
+                if (renderedCount >= window.maxDisplayedRows) return;
+                
                 const severity = log.severity || 'INFO';
                 
                 if (currentSeverityFilter !== 'ALL' && severity.toUpperCase() !== currentSeverityFilter) {
@@ -1262,6 +1279,7 @@ def write_static_html():
                     return;
                 }
 
+                renderedCount++;
                 const record = log.record || log;
                 const summary = getEventSummary(record);
                 const compliance = getCompliancePercentage(severity);
@@ -1284,6 +1302,12 @@ def write_static_html():
                     </tr>
                 `;
             });
+            
+            if (renderedCount >= window.maxDisplayedRows) {
+                rowsHTML += `<tr><td colspan="5" style="text-align: center; padding: 15px;">
+                    <button onclick="window.loadMoreLogs()" style="background: rgba(56, 189, 248, 0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: 'Outfit', sans-serif;">Load Next 100 Logs</button>
+                </td></tr>`;
+            }
 
             tbody.innerHTML = rowsHTML;
         }
@@ -1464,6 +1488,12 @@ def write_static_html():
                 producerVal.className = 'status-val text-idle';
             }
 
+            // Update UI status
+            if (document.getElementById('sys-cpu')) {
+                document.getElementById('sys-cpu').innerText = (data.cpu_usage || 0) + '%';
+                document.getElementById('sys-ram').innerText = (data.ram_usage || 0) + '%';
+            }
+
             // Update metrics
             document.getElementById('metric-total-logs').innerText = data.total_logs;
             document.getElementById('metric-total-files').innerText = data.total_files;
@@ -1607,10 +1637,25 @@ def render_dashboard_data():
     latest_ip = "Unknown"
     
     if latest_events:
-        fingerprint = latest_events[0].get("device_fingerprint")
-        if isinstance(fingerprint, dict):
-            latest_device = fingerprint.get("device_name", "Unknown")
-            latest_ip = fingerprint.get("ip_address", "Unknown")
+        # Kafka partitions can deliver out of order. Find the absolute latest event by timestamp.
+        latest_event_by_time = None
+        max_ts = 0
+        for ev in latest_events:
+            ts_str = ev.get("timestamp", "")
+            try:
+                dt = datetime.strptime(ts_str, "%d-%m-%Y %I:%M:%S %p")
+                ts_val = dt.timestamp()
+                if ts_val > max_ts:
+                    max_ts = ts_val
+                    latest_event_by_time = ev
+            except Exception:
+                pass
+        
+        if latest_event_by_time:
+            fingerprint = latest_event_by_time.get("device_fingerprint")
+            if isinstance(fingerprint, dict):
+                latest_device = fingerprint.get("device_name", "Unknown")
+                latest_ip = fingerprint.get("ip_address", "Unknown")
 
     critical_count = len([
         x for x in latest_events
@@ -1657,6 +1702,8 @@ def render_dashboard_data():
             print(f"[ERROR loading latest report] {e}")
 
     data = {
+        "cpu_usage": psutil.cpu_percent(interval=None),
+        "ram_usage": psutil.virtual_memory().percent,
         "total_logs": total_logs_count,
         "total_files": total_files,
         "critical_count": critical_count,
@@ -1715,11 +1762,6 @@ for message in consumer:
         if unique_hash in seen_hashes:
             continue
         
-        # Limit seen_hashes size to 5,000 to prevent RAM memory leak
-        if len(seen_hashes) > 5000:
-            oldest = seen_hashes_list.pop(0)
-            seen_hashes.discard(oldest)
-            
         seen_hashes.add(unique_hash)
         seen_hashes_list.append(unique_hash)
     except Exception:
@@ -1742,14 +1784,10 @@ for message in consumer:
     # Track overall logs count
     total_logs_count += 1
 
-    # Keep in-memory structures capped (RAM optimization)
+    # In-memory structures (Uncapped as per request)
     file_logs[file_name].insert(0, data)
-    if len(file_logs[file_name]) > 50:
-        file_logs[file_name].pop()
 
     latest_events.insert(0, data)
-    if len(latest_events) > 200:
-        latest_events.pop()
 
     needs_render = True
 
@@ -1757,7 +1795,7 @@ for message in consumer:
     now_ts = time.time()
     if needs_render and (now_ts - last_render_time >= 2.0):
         render_dashboard_data()
-        last_render_time = now_ts
+        last_render_time = time.time()
         needs_render = False
         
         # Occasional garbage collection (every 30s instead of every tick to save CPU)
