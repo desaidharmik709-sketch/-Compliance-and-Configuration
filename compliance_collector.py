@@ -630,10 +630,21 @@ def registry_autoruns():
         if ($items) {
             foreach ($prop in $items.psobject.properties) {
                 if ($prop.Name -notmatch "^PS[A-Z]") {
+                    $rawVal = $prop.Value -as [string]
+                    $exePath = $rawVal -replace '(?s)(^"([^"]+)".*)|(^\S+).*', '$2$3'
+                    
+                    $publisher = "Unknown"
+                    if (Test-Path $exePath -ErrorAction SilentlyContinue) {
+                        try {
+                            $ver = (Get-Item $exePath -ErrorAction SilentlyContinue).VersionInfo.CompanyName
+                            if ($ver) { $publisher = $ver }
+                        } catch {}
+                    }
+
                     $autoruns += @{
                         Path = $p
-                        Executable = $prop.Value
-                        Publisher = "Unknown"
+                        Executable = $rawVal
+                        Publisher = $publisher
                         SignatureStatus = "Unknown"
                         Hash = "Unknown"
                     }
@@ -646,14 +657,20 @@ def registry_autoruns():
 
 def scheduled_tasks():
     return run_ps(r"""
-    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {$_.State -eq 'Ready' -or $_.State -eq 'Running'} | Select-Object -First 100 |
-    Select-Object TaskName, TaskPath, State, Author, 
-    @{Name='LastRunTime';Expression={$_.LastRunTime}}, 
-    @{Name='NextRunTime';Expression={$_.NextRunTime}}, 
-    @{Name='Action';Expression={($_.Actions | Select-Object -ExpandProperty Execute -ErrorAction SilentlyContinue) -join ','}}, 
-    @{Name='RunAsUser';Expression={$_.Principal.UserId}}, 
-    @{Name='Hidden';Expression={$_.Settings.Hidden}} |
-    ConvertTo-Json -Depth 3
+    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {$_.State -eq 'Ready' -or $_.State -eq 'Running'} | Select-Object -First 100 | ForEach-Object {
+        $info = $_ | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+        [PSCustomObject]@{
+            TaskName = $_.TaskName
+            TaskPath = $_.TaskPath
+            State = $_.State
+            Author = $_.Author
+            LastRunTime = if ($info.LastRunTime -and $info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+            NextRunTime = if ($info.NextRunTime -and $info.NextRunTime.Year -gt 1900) { $info.NextRunTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+            Action = ($_.Actions | Select-Object -ExpandProperty Execute -ErrorAction SilentlyContinue) -join ','
+            RunAsUser = $_.Principal.UserId
+            Hidden = $_.Settings.Hidden
+        }
+    } | ConvertTo-Json -Depth 3
     """)
 
 def user_accounts():
