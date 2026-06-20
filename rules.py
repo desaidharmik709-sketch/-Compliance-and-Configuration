@@ -1,445 +1,221 @@
-"""
-Compliance Verification Rules Engine
-Fully Integrated with Advanced Threat Intel and Memory-Optimized Throttling
-"""
-
 import json
-import gc
 from pathlib import Path
-from datetime import datetime
-
-# =========================================================
-# ADVANCED METRICS & ENRICHMENT ENGINE
-# =========================================================
-METRICS_FILE = Path("reports/team10_enrichment_metrics.json")
-
-def export_metric_to_json(metric_name, data_dict):
-    """Silently appends structured enrichment data to JSON with low memory overhead."""
-    METRICS_FILE.parent.mkdir(exist_ok=True)
-    current_data = {"execution_timestamp": datetime.utcnow().isoformat() + "Z", "correlations": {}}
-    
-    if METRICS_FILE.exists():
-        try:
-            with open(METRICS_FILE, "r", encoding="utf-8") as f:
-                current_data = json.load(f)
-                if "correlations" not in current_data:
-                    current_data["correlations"] = {}
-        except Exception:
-            pass  # Overwrite if corrupted
-            
-    current_data["correlations"][metric_name] = data_dict
-    
-    with open(METRICS_FILE, "w", encoding="utf-8") as f:
-        json.dump(current_data, f, indent=4)
-
-MOCK_CVE_DB = {
-    "Microsoft": {"cve_count": 34, "critical": 5, "risk": "High"},
-    "Edge": {"cve_count": 12, "critical": 2, "risk": "Medium"},
-    "Google Chrome": {"cve_count": 14, "critical": 2, "risk": "High"},
-    "Windows": {"cve_count": 45, "critical": 8, "risk": "Critical"}
-}
-
-MOCK_THREAT_INTEL = {
-    "update": {"reputation": "Suspicious_Update_Hijack (Simulated)", "actor": "APT29"},
-    "onedrive": {"reputation": "Cloud_Exfiltration_Node (Simulated)", "actor": "FIN7"},
-    "powershell.exe": {"reputation": "Suspicious_LOLBin", "actor": "General_Malware"}
-}
 
 DATA_DIR = Path("compliance_output")
-
 
 def load_latest(name):
     path = DATA_DIR / f"{name}.json"
     if not path.exists():
-        return {}
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             content = json.load(f)
         if isinstance(content, list) and len(content) > 0:
             latest = content[-1]
-            return (
-                latest
-                .get("payload_message", {})
-                .get("data", {})
-            )
-        return {}
-    except Exception:
-        return {}
-
-
-def safe_parse_json(value):
-    if value is None:
+            data = latest.get("payload_message", {}).get("data", [])
+            # Some collectors nest the data inside another dict (like audit policy Configuration)
+            if isinstance(data, dict):
+                return [data]
+            return data
         return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, dict):
-        return [value]
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return []
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, list): return parsed
-            if isinstance(parsed, dict): return [parsed]
-        except Exception:
-            pass
-    return []
+    except Exception:
+        return []
 
+def extract_severity_category(item):
+    if not isinstance(item, dict):
+        return "Info"
+    sev = item.get("Severity", "INFO").upper()
+    if sev == "CRITICAL": return "Critical"
+    if sev == "INVESTIGATE": return "Investigative"
+    if sev == "STATISTICAL": return "Info"
+    if sev == "WARNING": return "Warning"
+    return "Info"
 
-# --- Core Telemetry Checks ---
+def extract_evidence(item):
+    if not isinstance(item, dict):
+        return str(item)
+    reason = item.get("SeverityReason")
+    if reason:
+        return reason
+    # Fallback to DetectionParameters or whole item
+    params = item.get("DetectionParameters")
+    if params:
+        return json.dumps(params)
+    return json.dumps(item)
+
+def generate_findings(datapoint_name, data_list, controls):
+    findings = []
+    if not isinstance(data_list, list):
+        if isinstance(data_list, dict):
+            data_list = [data_list]
+        else:
+            data_list = []
+            
+    if not data_list:
+        for fw, ctrl, desc in controls:
+            findings.append({
+                "datapoint": datapoint_name,
+                "framework": fw,
+                "control_id": ctrl,
+                "control_description": desc,
+                "status": "FAIL",
+                "evidence": "Telemetry missing or empty",
+                "risk_category": "Warning",
+                "remediation": "Ensure collector is running and outputting data."
+            })
+        return findings
+
+    for item in data_list:
+        if not isinstance(item, dict):
+            continue
+        category = extract_severity_category(item)
+        
+        risk = str(item.get("RiskLevel", "LOW")).upper()
+        if category == "Info" and risk in ["MEDIUM", "HIGH"]:
+            category = "Warning"
+            
+        status = "FAIL" if category in ["Critical", "Warning"] else "PASS"
+        evidence = extract_evidence(item)
+        
+        for fw, ctrl, desc in controls:
+            findings.append({
+                "id": datapoint_name,
+                "datapoint": datapoint_name,
+                "framework": fw,
+                "control_id": ctrl,
+                "control_description": desc,
+                "status": status,
+                "evidence": evidence,
+                "risk_category": category,
+                "remediation": f"Review {evidence} and apply proper configuration" if status == "FAIL" else "N/A"
+            })
+            
+    return findings
+
+# --- Datapoint Checks ---
 
 def installed_software_check():
-    data = load_latest("01_installed_software")
-    items = safe_parse_json(data.get("stdout", ""))
-    banned = ["utorrent", "bittorrent", "teamviewer"]
-    found = []
-    for item in items:
-        name = str(item.get("DisplayName", "")).lower()
-        if any(b in name for b in banned):
-            found.append(name)
-    return {
-        "status": len(found) == 0,
-        "evidence": "No blacklisted software found" if len(found) == 0 else f"Identified risks: {', '.join(found)}"
-    }
-
+    return generate_findings("01_installed_software", load_latest("01_installed_software"), [
+        ("PCI DSS v4.0", "PCI-6.2", "Malware Protection and Asset Inventory"),
+        ("NIST SP 800-53 Rev. 5", "CM-8", "System Component Inventory"),
+        ("DPDP Act 2023", "DPDP-SEC-01", "Security Safeguards")
+    ])
 
 def hardware_inventory_check():
-    data = load_latest("04_hardware_inventory")
-    items = safe_parse_json(data.get("stdout"))
-    valid = (len(items) > 0 and items[0].get("Manufacturer") and items[0].get("Model"))
-    return {
-        "status": valid,
-        "evidence": f"{items[0].get('Manufacturer')} {items[0].get('Model')}" if valid else "Telemetry missing"
-    }
-
+    return generate_findings("04_hardware_inventory", load_latest("04_hardware_inventory"), [
+        ("PCI DSS v4.0", "PCI-9.1", "Asset Inventory"),
+        ("NIST SP 800-53 Rev. 5", "CM-8", "System Component Inventory"),
+        ("DPDP Act 2023", "DPDP-SEC-01", "Security Safeguards")
+    ])
 
 def windows_services_check():
-    data = load_latest("05_windows_services")
-    items = safe_parse_json(data.get("stdout", ""))
-    required = ["windefend", "mpssvc"]
-    active = [str(i.get("Name", "")).lower() for i in items]
-    missing = [s for s in required if s not in active]
-    return {
-        "status": len(missing) == 0,
-        "evidence": "Core services active" if not missing else f"Missing: {', '.join(missing)}"
-    }
-
+    return generate_findings("05_windows_services", load_latest("05_windows_services"), [
+        ("PCI DSS v4.0", "PCI-2.2", "System Hardening"),
+        ("NIST SP 800-53 Rev. 5", "CM-7", "Least Functionality"),
+        ("DPDP Act 2023", "DPDP-MON-01", "Monitoring Controls")
+    ])
 
 def failed_logins_check():
-    data = load_latest("06_failed_logins")
-    items = safe_parse_json(data.get("stdout", ""))
-    return {"status": len(items) < 20, "evidence": f"{len(items)} failed logins"}
-
+    return generate_findings("06_failed_logins", load_latest("06_failed_logins"), [
+        ("PCI DSS v4.0", "PCI-10.2", "Logging and Monitoring"),
+        ("NIST SP 800-53 Rev. 5", "AC-7", "Unsuccessful Logon Attempts"),
+        ("DPDP Act 2023", "DPDP-AUD-01", "Auditability")
+    ])
 
 def successful_logins_check():
-    data = load_latest("07_successful_logins")
-    items = safe_parse_json(data.get("stdout"))
-    return {"status": len(items) > 0, "evidence": f"{len(items)} successful logins"}
-
+    return generate_findings("07_successful_logins", load_latest("07_successful_logins"), [
+        ("PCI DSS v4.0", "PCI-8.1", "Account Management"),
+        ("NIST SP 800-53 Rev. 5", "AC-2", "Account Management"),
+        ("DPDP Act 2023", "DPDP-ACC-01", "Access Governance")
+    ])
 
 def firewall_enabled():
-    data = load_latest("10_firewall_configuration")
-    items = safe_parse_json(data.get("stdout"))
-    if not items:
-        return {"status": False, "evidence": "No firewall telemetry"}
-    enabled_profiles = sum(1 for profile in items if profile.get("Enabled") is True)
-    return {"status": enabled_profiles == 3, "evidence": f"{enabled_profiles}/3 firewall profiles enabled"}
-
+    return generate_findings("10_firewall_configuration", load_latest("10_firewall_configuration"), [
+        ("PCI DSS v4.0", "PCI-1.2", "Secure Configuration Management"),
+        ("NIST SP 800-53 Rev. 5", "SC-7", "Boundary Protection"),
+        ("DPDP Act 2023", "DPDP-SEC-02", "Security Safeguards")
+    ])
 
 def registry_autoruns_check():
-    data = load_latest("12_registry_autoruns")
-    suspicious = ["appdata\\", "temp\\", "powershell", "wscript", "cscript"]
-    combined_text = json.dumps(data).lower()
-    found = [item for item in suspicious if item in combined_text]
-    return {
-        "status": len(found) == 0,
-        "evidence": "Clean autorun locations" if not found else f"Suspicious autoruns: {', '.join(found)}"
-    }
-
+    return generate_findings("12_registry_autoruns", load_latest("12_registry_autoruns"), [
+        ("PCI DSS v4.0", "PCI-11.5", "Change Detection"),
+        ("NIST SP 800-53 Rev. 5", "SI-7", "Software, Firmware, and Information Integrity"),
+        ("DPDP Act 2023", "DPDP-MON-02", "Monitoring Controls")
+    ])
 
 def scheduled_tasks_check():
-    data = load_latest("13_scheduled_tasks")
-    items = safe_parse_json(data.get("stdout", ""))
-    suspicious = ["wscript.exe", "cscript.exe"]
-    found = []
-    for t in items:
-        text = str(t).lower()
-        if any(s in text for s in suspicious):
-            found.append(t.get("TaskName", ""))
-    return {"status": len(found) == 0, "evidence": "OK" if not found else f"Suspicious tasks: {', '.join(found)}"}
-
+    return generate_findings("13_scheduled_tasks", load_latest("13_scheduled_tasks"), [
+        ("PCI DSS v4.0", "PCI-11.5", "Change Detection"),
+        ("NIST SP 800-53 Rev. 5", "SI-7", "Software, Firmware, and Information Integrity"),
+        ("DPDP Act 2023", "DPDP-MON-02", "Monitoring Controls")
+    ])
 
 def admin_accounts_check():
-    data = load_latest("16_user_accounts_and_privileges")
-    admins = data.get("admins", {}).get("stdout", [])
-    items = safe_parse_json(admins)
-    return {"status": len(items) > 0, "evidence": f"{len(items)} admin entries"}
-
+    return generate_findings("16_user_accounts_and_privileges", load_latest("16_user_accounts_and_privileges"), [
+        ("PCI DSS v4.0", "PCI-7.1", "Access Control"),
+        ("NIST SP 800-53 Rev. 5", "AC-6", "Least Privilege"),
+        ("DPDP Act 2023", "DPDP-ACC-02", "Access Governance")
+    ])
 
 def defender_enabled():
-    data = load_latest("17_windows_defender_status")
-    items = safe_parse_json(data.get("stdout"))
-    if not items:
-        return {"status": False, "evidence": "No data"}
-    status = bool(items[0].get("RealTimeProtectionEnabled"))
-    return {"status": status, "evidence": "Defender active" if status else "Defender OFF"}
-
+    return generate_findings("17_windows_defender_status", load_latest("17_windows_defender_status"), [
+        ("PCI DSS v4.0", "PCI-5.1", "Malware Protection"),
+        ("NIST SP 800-53 Rev. 5", "SI-3", "Malicious Code Protection"),
+        ("DPDP Act 2023", "DPDP-DPC-01", "Data Protection Controls")
+    ])
 
 def boot_shutdown_check():
-    data = load_latest("20_boot_shutdown_events")
-    items = safe_parse_json(data.get("stdout"))
-    boots = sum(1 for e in items if str(e.get("Id", "")) == "6005")
-    shutdowns = sum(1 for e in items if str(e.get("Id", "")) == "6006")
-    return {"status": boots > 0, "evidence": f"{boots} boots and {shutdowns} shutdown events"}
-
+    return generate_findings("20_boot_shutdown_events", load_latest("20_boot_shutdown_events"), [
+        ("PCI DSS v4.0", "PCI-10.6", "Logging and Monitoring"),
+        ("NIST SP 800-53 Rev. 5", "AU-5", "Response to Audit Processing Failures"),
+        ("DPDP Act 2023", "DPDP-AUD-02", "Auditability")
+    ])
 
 def audit_policy_check():
-    data = load_latest("21_audit_policy_configuration")
-    items = safe_parse_json(data.get("stdout"))
-    required = ["logon", "logoff", "policy"]
-    combined = " ".join(f"{str(i.get('Subcategory', '')).lower()} {str(i.get('Setting', '')).lower()}" for i in items)
-    missing = [r for r in required if r not in combined]
-    return {"status": len(missing) == 0, "evidence": "Audit policies detected" if not missing else f"Missing: {', '.join(missing)}"}
-
+    return generate_findings("21_audit_policy_configuration", load_latest("21_audit_policy_configuration"), [
+        ("PCI DSS v4.0", "PCI-10.1", "Logging and Monitoring"),
+        ("NIST SP 800-53 Rev. 5", "AU-6", "Audit Review, Analysis, and Reporting"),
+        ("DPDP Act 2023", "DPDP-AUD-03", "Auditability")
+    ])
 
 def drivers_inventory_check():
-    data = load_latest("22_drivers_inventory")
-    items = safe_parse_json(data.get("stdout"))
-    if not items:
-        return {"status": False, "evidence": "No driver inventory"}
-    important_keywords = ["bluetooth", "usb", "wireless", "audio", "realtek", "intel", "nvidia", "pci"]
-    important = 0
-    for driver in items:
-        device_name = str(driver.get("DeviceName", "")).lower()
-        if any(k in device_name for k in important_keywords):
-            important += 1
-    return {"status": len(items) > 10, "evidence": f"{len(items)} drivers discovered, {important} critical drivers identified"}
-
+    return generate_findings("22_drivers_inventory", load_latest("22_drivers_inventory"), [
+        ("PCI DSS v4.0", "PCI-2.2", "System Hardening"),
+        ("NIST SP 800-53 Rev. 5", "SI-4", "Information System Monitoring"),
+        ("DPDP Act 2023", "DPDP-MON-03", "Monitoring Controls")
+    ])
 
 def more_windows_settings_check():
-    data = load_latest("23_more_windows_settings")
-    defender = json.dumps(data.get("windows_defender", {})).lower()
-    firewall = json.dumps(data.get("firewall_profiles", {})).lower()
-    secure_boot = json.dumps(data.get("secure_boot", {})).lower()
-    checks = sum([1 for c in ["true" in defender, "enabled" in firewall or "true" in firewall, "true" in secure_boot] if c])
-    return {"status": checks >= 2, "evidence": f"{checks}/3 core security settings validated"}
-
+    return generate_findings("23_more_windows_settings", load_latest("23_more_windows_settings"), [
+        ("PCI DSS v4.0", "PCI-2.2", "Secure Configuration Management"),
+        ("NIST SP 800-53 Rev. 5", "CM-6", "Configuration Settings"),
+        ("DPDP Act 2023", "DPDP-SEC-03", "Security Safeguards")
+    ])
 
 def usb_direct_connection_check():
-    data = load_latest("24_usb_direct_connection")
-    items = safe_parse_json(data.get("stdout", ""))
-    return {"status": True, "evidence": f"{len(items)} USB entries"}
-
+    return generate_findings("24_usb_direct_connection", load_latest("24_usb_direct_connection"), [
+        ("PCI DSS v4.0", "PCI-3.4", "System Hardening"),
+        ("NIST SP 800-53 Rev. 5", "MP-7", "Media Use"),
+        ("DPDP Act 2023", "DPDP-DPC-02", "Data Protection Controls")
+    ])
 
 def bios_snapshot_check():
-    data = load_latest("25_bios_snapshot")
-    raw = data.get("stdout", [])
-    if isinstance(raw, dict): raw = [raw]
-    if not raw: return {"status": False, "evidence": "No BIOS data"}
-    return {"status": True, "evidence": f"BIOS Version: {raw[0].get('SMBIOSBIOSVersion', 'Unknown')}"}
-
+    return generate_findings("25_bios_snapshot", load_latest("25_bios_snapshot"), [
+        ("PCI DSS v4.0", "PCI-2.2", "System Hardening"),
+        ("NIST SP 800-53 Rev. 5", "CM-8", "System Component Inventory"),
+        ("DPDP Act 2023", "DPDP-SEC-04", "Security Safeguards")
+    ])
 
 def windows_scan_history_check():
-    data = load_latest("26_windows_scan_history")
-    items = safe_parse_json(data.get("stdout", ""))
-    return {"status": True, "evidence": f"{len(items)} scan logs"}
-
+    return generate_findings("26_windows_scan_history", load_latest("26_windows_scan_history"), [
+        ("PCI DSS v4.0", "PCI-5.2", "Malware Protection"),
+        ("NIST SP 800-53 Rev. 5", "SI-3", "Malicious Code Protection"),
+        ("DPDP Act 2023", "DPDP-MON-04", "Monitoring Controls")
+    ])
 
 def usb_setting_history_check():
-    data = load_latest("27_usb_setting_history")
-    return {"status": True, "evidence": "USB registry checked"}
-
-
-# --- Cross-Layer Correlation Logic ---
-
-def corr_01_software_services():
-    sw_data = load_latest("01_installed_software")
-    sw_items = safe_parse_json(sw_data.get("stdout", ""))
-    svc_data = load_latest("05_windows_services")
-    svc_items = safe_parse_json(svc_data.get("stdout", ""))
-
-    vulnerable_installed = []
-    for item in sw_items:
-        name = str(item.get("DisplayName", ""))
-        for mock_name, mock_data in MOCK_CVE_DB.items():
-            if name and mock_name.lower() in name.lower():
-                vulnerable_installed.append({"app_name": name, "cve_data": mock_data})
-
-    running_vulnerable_services = []
-    for svc in svc_items:
-        svc_name = str(svc.get("DisplayName", "")).lower()
-        for vul in vulnerable_installed:
-            app_keyword = vul["app_name"].split()[0].lower() 
-            if app_keyword in svc_name:
-                running_vulnerable_services.append(svc.get("DisplayName", ""))
-
-    export_metric_to_json("Software_to_Services_Correlation", {
-        "total_software_scanned": len(sw_items),
-        "total_services_scanned": len(svc_items),
-        "vulnerable_software_found": len(vulnerable_installed),
-        "vulnerable_services_actively_running": len(running_vulnerable_services),
-        "enriched_cve_data": vulnerable_installed
-    })
-    return {
-        "status": len(running_vulnerable_services) == 0,
-        "evidence": f"Found {len(vulnerable_installed)} vulnerable apps. {len(running_vulnerable_services)} running as active services."
-    }
-
-
-def corr_02_persistence_threat_intel():
-    tasks_data = load_latest("13_scheduled_tasks")
-    tasks_items = safe_parse_json(tasks_data.get("stdout", ""))
-    auto_data = load_latest("12_registry_autoruns")
-    run_out = json.dumps(
-    auto_data,
-    ensure_ascii=False
-    ).lower()
-
-    flagged_persistence = []
-    for task in tasks_items:
-        path = str(task.get("TaskPath", "")).lower() + str(task.get("TaskName", "")).lower()
-        for key, intel in MOCK_THREAT_INTEL.items():
-            if key in path:
-                flagged_persistence.append({"type": "Scheduled Task", "match": key, "intel": intel})
-
-    for key, intel in MOCK_THREAT_INTEL.items():
-        if key in run_out:
-            flagged_persistence.append({"type": "Registry Autorun", "match": key, "intel": intel})
-
-    export_metric_to_json("Persistence_Threat_Intel_Correlation", {
-        "total_tasks_scanned": len(tasks_items),
-        "threat_intel_matches": len(flagged_persistence),
-        "malicious_persistence_mechanisms": flagged_persistence
-    })
-    return {
-        "status": len(flagged_persistence) == 0,
-        "evidence": f"Mapped persistence mechanisms. {len(flagged_persistence)} Threat Intel matches found."
-    }
-
-
-# =========================================================
-# CONTROL FRAMEWORK MAPPING MATRIX (Restored to Original IDs)
-# =========================================================
-RULES = [
-    {
-        "id": "T10-CORR-01",
-        "framework": "SYSTEM",
-        "control": "Software to Service Vulnerability Mapping",
-        "datapoint": "t10_corr_01"
-    },
-    {
-        "id": "T10-CORR-02",
-        "framework": "SYSTEM",
-        "control": "Persistence Threat Intel Enrichment",
-        "datapoint": "t10_corr_02"
-    },
-    {
-        "id": "01_installed_software",
-        "framework": "SYSTEM",
-        "control": "Installed Software Inventory",
-        "datapoint": "01_installed_software"
-    },
-    {
-        "id": "04_hardware_inventory",
-        "framework": "SYSTEM",
-        "control": "Hardware Asset Inventory",
-        "datapoint": "04_hardware_inventory"
-    },
-    {
-        "id": "05_windows_services",
-        "framework": "SYSTEM",
-        "control": "Windows Service Enumeration",
-        "datapoint": "05_windows_services"
-    },
-    {
-        "id": "AC-7",
-        "framework": "NIST",
-        "control": "Failed Login Monitoring",
-        "datapoint": "06_failed_logins"
-    },
-    {
-        "id": "AU-2",
-        "framework": "NIST",
-        "control": "Successful Login Auditing",
-        "datapoint": "07_successful_logins"
-    },
-    {
-        "id": "PCI-1.4",
-        "framework": "PCI DSS",
-        "control": "Firewall Configuration",
-        "datapoint": "10_firewall_configuration"
-    },
-    {
-        "id": "SI-7",
-        "framework": "NIST",
-        "control": "Registry Autorun Monitoring",
-        "datapoint": "12_registry_autoruns"
-    },
-    {
-        "id": "AU-12-ST",
-        "framework": "DPDP",
-        "control": "Scheduled Task Monitoring",
-        "datapoint": "13_scheduled_tasks"
-    },
-    {
-        "id": "AC-6",
-        "framework": "NIST",
-        "control": "Privileged Account Monitoring",
-        "datapoint": "16_user_accounts_and_privileges"
-    },
-    {
-        "id": "PCI-5.2",
-        "framework": "PCI DSS",
-        "control": "Endpoint Protection",
-        "datapoint": "17_windows_defender_status"
-    },
-    {
-        "id": "AU-5",
-        "framework": "NIST",
-        "control": "System Boot Monitoring",
-        "datapoint": "20_boot_shutdown_events"
-    },
-    {
-        "id": "AU-6",
-        "framework": "NIST",
-        "control": "Audit Policy Monitoring",
-        "datapoint": "21_audit_policy_configuration"
-    },
-    {
-        "id": "DRV-01",
-        "framework": "SYSTEM",
-        "control": "Driver Tree Inventory Mapping",
-        "datapoint": "22_drivers_inventory"
-    },
-    {
-        "id": "WIN-SET",
-        "framework": "SYSTEM",
-        "control": "Extended Local Subsystem Regulations",
-        "datapoint": "23_more_windows_settings"
-    },
-    {
-        "id": "USB-DIR",
-        "framework": "HARDWARE",
-        "control": "Logical Host Storage Route Identification",
-        "datapoint": "24_usb_direct_connection"
-    },
-    {
-        "id": "BIOS-SNAP",
-        "framework": "HARDWARE",
-        "control": "Firmware Core Configuration Identifiers",
-        "datapoint": "25_bios_snapshot"
-    },
-    {
-        "id": "SCAN-HIST",
-        "framework": "ENDPOINT",
-        "control": "Local Threat History Auditing Logs",
-        "datapoint": "26_windows_scan_history"
-    },
-    {
-        "id": "USB-HIST",
-        "framework": "HARDWARE",
-        "control": "Historical Peripheral Storage Connectivity Signatures",
-        "datapoint": "27_usb_setting_history"
-    }
-]
+    return generate_findings("27_usb_setting_history", load_latest("27_usb_setting_history"), [
+        ("PCI DSS v4.0", "PCI-3.4", "System Hardening"),
+        ("NIST SP 800-53 Rev. 5", "MP-7", "Media Use"),
+        ("DPDP Act 2023", "DPDP-DPC-03", "Data Protection Controls")
+    ])
