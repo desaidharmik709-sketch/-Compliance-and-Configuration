@@ -8,7 +8,7 @@ The module performs compliance assessment across multiple system areas, includin
 
 Collected data is processed through a rules engine and score engine to generate compliance scores and security findings.
 Data Points:-
-
+compliance_telemetry_data_dictionary.pdf
 
 Features
 
