@@ -50,6 +50,39 @@ def normalize_stdout(stdout):
         return stdout
 
     if isinstance(stdout, dict):
+        exploded = []
+        # Explode firewall rules
+        if "InboundRules" in stdout or "OutboundRules" in stdout:
+            overall_severity = stdout.get("Severity", "INFO")
+            for rule in stdout.get("InboundRules", []):
+                rule["RuleType"] = "Inbound"
+                rule["OverallSeverity"] = overall_severity
+                exploded.append(rule)
+            for rule in stdout.get("OutboundRules", []):
+                rule["RuleType"] = "Outbound"
+                rule["OverallSeverity"] = overall_severity
+                exploded.append(rule)
+            if not exploded:
+                exploded.append(stdout)
+            return exploded
+            
+        # Explode Audit Policy
+        if "Configuration" in stdout or "RecentAuditEvents" in stdout:
+            for conf in stdout.get("Configuration", []):
+                conf["Type"] = "Audit Configuration"
+                exploded.append(conf)
+            for evt in stdout.get("RecentAuditEvents", []):
+                if isinstance(evt, dict):
+                    evt["Type"] = "Recent Audit Event"
+                    exploded.append(evt)
+            if not exploded:
+                exploded.append(stdout)
+            return exploded
+
+        # Explode generic flat dictionaries into key-value pairs for better rendering, except if it's already a clean event
+        if "DetectionParameters" in stdout:
+            return [stdout]
+            
         return [stdout]
 
     if isinstance(stdout, str):
@@ -107,12 +140,17 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
                 ""
             )
 
-            stdout = telemetry.get(
-                "stdout",
-                []
-            )
+            telemetry = payload_message.get("data", {})
 
-            normalized_records = normalize_stdout(stdout)
+            # If telemetry is already a list, it's the new flattened format!
+            if isinstance(telemetry, list):
+                normalized_records = telemetry
+            else:
+                if isinstance(telemetry, dict) and "stdout" in telemetry:
+                    stdout = telemetry.get("stdout", [])
+                else:
+                    stdout = telemetry
+                normalized_records = normalize_stdout(stdout)
 
             if not normalized_records:
 
@@ -127,11 +165,18 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
                 start=1
             ):
 
+                individual_severity = obj.get("severity", "INFO")
+                if isinstance(record, dict):
+                    if "Severity" in record:
+                        individual_severity = record["Severity"]
+                    elif "OverallSeverity" in record:
+                        individual_severity = record["OverallSeverity"]
+
                 kafka_payload = {
                     "file_name": file.name,
                     "event_id": obj.get("event_id", ""),
                     "event_type": obj.get("event_type", ""),
-                    "severity": obj.get("severity", "INFO"),
+                    "severity": individual_severity,
                     "timestamp": timestamp,
                     "username": username,
                     "hostname": hostname,
@@ -153,6 +198,7 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
                 producer.flush()
 
                 time.sleep(0.03)
+
     except Exception as e:
 
         print(
