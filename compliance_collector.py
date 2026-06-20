@@ -634,10 +634,23 @@ def registry_autoruns():
                     $exePath = $rawVal -replace '(?s)(^"([^"]+)".*)|(^\S+).*', '$2$3'
                     
                     $publisher = "Unknown"
+                    $hash = "Unknown"
+                    $sigStatus = "Unknown"
+                    
                     if (Test-Path $exePath -ErrorAction SilentlyContinue) {
                         try {
                             $ver = (Get-Item $exePath -ErrorAction SilentlyContinue).VersionInfo.CompanyName
                             if ($ver) { $publisher = $ver }
+                        } catch {}
+                        
+                        try {
+                            $h = (Get-FileHash -Path $exePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                            if ($h) { $hash = $h }
+                        } catch {}
+                        
+                        try {
+                            $sig = (Get-AuthenticodeSignature -FilePath $exePath -ErrorAction SilentlyContinue).Status
+                            if ($null -ne $sig) { $sigStatus = $sig -as [string] }
                         } catch {}
                     }
 
@@ -645,8 +658,8 @@ def registry_autoruns():
                         Path = $p
                         Executable = $rawVal
                         Publisher = $publisher
-                        SignatureStatus = "Unknown"
-                        Hash = "Unknown"
+                        SignatureStatus = $sigStatus
+                        Hash = $hash
                     }
                 }
             }
@@ -659,10 +672,19 @@ def scheduled_tasks():
     return run_ps(r"""
     Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {$_.State -eq 'Ready' -or $_.State -eq 'Running'} | Select-Object -First 100 | ForEach-Object {
         $info = $_ | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+        
+        $st = [int]$_.State
+        $stateStr = "Unknown"
+        if ($st -eq 0) { $stateStr = "Unknown" }
+        elseif ($st -eq 1) { $stateStr = "Disabled" }
+        elseif ($st -eq 2) { $stateStr = "Queued" }
+        elseif ($st -eq 3) { $stateStr = "Ready" }
+        elseif ($st -eq 4) { $stateStr = "Running" }
+
         [PSCustomObject]@{
             TaskName = $_.TaskName
             TaskPath = $_.TaskPath
-            State = $_.State
+            State = $stateStr
             Author = $_.Author
             LastRunTime = if ($info.LastRunTime -and $info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
             NextRunTime = if ($info.NextRunTime -and $info.NextRunTime.Year -gt 1900) { $info.NextRunTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
@@ -729,6 +751,20 @@ def audit_policy():
     $events = Get-WinEvent -FilterHashtable @{LogName='Security'} -MaxEvents 20 -ErrorAction SilentlyContinue
     if ($events) {
         foreach ($e in $events) {
+            $userStr = "N/A"
+            if ($null -ne $e.UserId) {
+                try {
+                    $userStr = (New-Object System.Security.Principal.SecurityIdentifier($e.UserId.Value)).Translate([System.Security.Principal.NTAccount]).Value
+                } catch {
+                    $userStr = $e.UserId.Value
+                }
+            }
+            if ($userStr -eq "N/A" -or $userStr -eq "") {
+                if ($e.Message -match "Account Name:\s*([^\r\n]+)") {
+                    $userStr = $Matches[1].Trim()
+                }
+            }
+
             $result.RecentAuditEvents += @{
                 LogName = $e.LogName
                 Source = $e.ProviderName
@@ -736,7 +772,7 @@ def audit_policy():
                 TaskCategory = $e.TaskDisplayName
                 Level = $e.LevelDisplayName
                 Keywords = if ($e.KeywordsDisplayNames) { $e.KeywordsDisplayNames -join ", " } else { "N/A" }
-                User = if ($e.UserId) { $e.UserId.Value } else { "N/A" }
+                User = $userStr
                 OpCode = $e.OpcodeDisplayName
                 Computer = $e.MachineName
             }
@@ -750,11 +786,34 @@ def audit_policy():
 
 def drivers_inventory():
     return run_ps(r"""
-    Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | Where-Object { $_.DeviceName } | Select-Object -First 200 |
-    Select-Object DeviceName, DriverVersion, @{Name='IsSigned';Expression={$_.IsSigned}}, 
-    @{Name='DriverHash';Expression={'Unknown'}}, Signer, 
-    @{Name='DriverAgeDays';Expression={if ($_.DriverDate) { (New-TimeSpan -Start $_.DriverDate -End (Get-Date)).Days } else { 0 }}},
-    @{Name='KernelMode';Expression={$true}} | ConvertTo-Json -Depth 3
+    $drivers = Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | Where-Object { $_.DeviceName } | Select-Object -First 200
+    $out = @()
+    foreach ($d in $drivers) {
+        $hash = "Unknown"
+        if ($d.InfName) {
+            $path = Join-Path $env:windir "INF\$($d.InfName)"
+            if (Test-Path $path) {
+                try {
+                    $h = (Get-FileHash $path -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                    if ($h) { $hash = $h }
+                } catch {}
+            }
+        }
+        $age = 0
+        if ($d.DriverDate) {
+            $age = (New-TimeSpan -Start $d.DriverDate -End (Get-Date)).Days
+        }
+        $out += @{
+            DeviceName = $d.DeviceName
+            DriverVersion = $d.DriverVersion
+            IsSigned = $d.IsSigned
+            DriverHash = $hash
+            Signer = $d.Signer
+            DriverAgeDays = $age
+            KernelMode = $true
+        }
+    }
+    $out | ConvertTo-Json -Depth 3
     """)
 
 def more_windows_settings():
