@@ -548,9 +548,9 @@ def write_static_html():
         .tabs button[data-severity="ALL"] { --tab-gradient: linear-gradient(135deg, #38bdf8, #818cf8); --tab-glow: rgba(56, 189, 248, 0.4); }
         .tabs button[data-severity="CRITICAL"] { --tab-gradient: linear-gradient(135deg, #ff4d4d, #f43f5e); --tab-glow: rgba(239, 68, 68, 0.5); }
         .tabs button[data-severity="WARNING"] { --tab-gradient: linear-gradient(135deg, #ff9500, #fbbf24); --tab-glow: rgba(245, 158, 11, 0.5); }
-        .tabs button[data-severity="INVESTIGATIVE"] { --tab-gradient: linear-gradient(135deg, #b76eff, #a855f7); --tab-glow: rgba(168, 85, 247, 0.5); }
+        .tabs button[data-severity="INVESTIGATE"] { --tab-gradient: linear-gradient(135deg, #b76eff, #a855f7); --tab-glow: rgba(168, 85, 247, 0.5); }
         .tabs button[data-severity="INFO"] { --tab-gradient: linear-gradient(135deg, #00e676, #10b981); --tab-glow: rgba(16, 185, 129, 0.5); }
-        .tabs button[data-severity="STATISTICS"] { --tab-gradient: linear-gradient(135deg, #3b82f6, #60a5fa); --tab-glow: rgba(59, 130, 246, 0.5); }
+        .tabs button[data-severity="STATISTICAL"] { --tab-gradient: linear-gradient(135deg, #3b82f6, #60a5fa); --tab-glow: rgba(59, 130, 246, 0.5); }
 
         /* Search bar styling */
         .search-container {
@@ -622,7 +622,7 @@ def write_static_html():
             text-shadow: 0 0 12px rgba(245, 158, 11, 0.45);
         }
 
-        .severity-investigative {
+        .severity-investigate {
             color: #b76eff;
             font-weight: 800;
             text-shadow: 0 0 12px rgba(168, 85, 247, 0.45);
@@ -634,7 +634,7 @@ def write_static_html():
             text-shadow: 0 0 12px rgba(16, 185, 129, 0.45);
         }
 
-        .severity-statistics {
+        .severity-statistical {
             color: #3b82f6;
             font-weight: 800;
             text-shadow: 0 0 12px rgba(59, 130, 246, 0.45);
@@ -663,9 +663,9 @@ def write_static_html():
 
         .info-fill { background: linear-gradient(90deg, #10b981, #059669); }
         .warning-fill { background: linear-gradient(90deg, #f59e0b, #d97706); }
-        .investigative-fill { background: linear-gradient(90deg, #a855f7, #7c3aed); }
+        .investigate-fill { background: linear-gradient(90deg, #a855f7, #7c3aed); }
         .critical-fill { background: linear-gradient(90deg, #ef4444, #dc2626); }
-        .statistics-fill { background: linear-gradient(90deg, #3b82f6, #2563eb); }
+        .statistical-fill { background: linear-gradient(90deg, #3b82f6, #2563eb); }
 
         /* Compliance report classes */
         .badge-pass { background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.25); }
@@ -932,9 +932,9 @@ def write_static_html():
                         <button data-severity="ALL" class="active" onclick="filterSeverity('ALL')">All</button>
                         <button data-severity="CRITICAL" onclick="filterSeverity('CRITICAL')">Critical</button>
                         <button data-severity="WARNING" onclick="filterSeverity('WARNING')">Warning</button>
-                        <button data-severity="INVESTIGATIVE" onclick="filterSeverity('INVESTIGATIVE')">Investigative</button>
+                        <button data-severity="INVESTIGATE" onclick="filterSeverity('INVESTIGATE')">Investigative</button>
                         <button data-severity="INFO" onclick="filterSeverity('INFO')">Info</button>
-                        <button data-severity="STATISTICS" onclick="filterSeverity('STATISTICS')">Statistics</button>
+                        <button data-severity="STATISTICAL" onclick="filterSeverity('STATISTICAL')">Statistics</button>
                     </div>
 
                     <div class="search-container">
@@ -1126,6 +1126,13 @@ def write_static_html():
             if (typeof record !== 'object' || record === null) {
                 return String(record);
             }
+            let targetObj = record;
+            if (Array.isArray(record) && record.length > 0) {
+                targetObj = record[0];
+            } else if (Array.isArray(record)) {
+                return "Empty List";
+            }
+            
             const priorityFields = [
                 "task_name", "service_name", "process_name", "ProcessName",
                 "name", "Name", "status", "message", "DisplayName",
@@ -1133,8 +1140,12 @@ def write_static_html():
             ];
             for (let i = 0; i < priorityFields.length; i++) {
                 const field = priorityFields[i];
-                if (field in record && record[field] !== null && record[field] !== undefined) {
-                    return String(record[field]);
+                if (field in targetObj && targetObj[field] !== null && targetObj[field] !== undefined) {
+                    let summary = String(targetObj[field]);
+                    if (Array.isArray(record) && record.length > 1) {
+                        summary += ` (and ${record.length - 1} more)`;
+                    }
+                    return summary;
                 }
             }
             return JSON.stringify(record).substring(0, 120);
@@ -1144,8 +1155,8 @@ def write_static_html():
             const sev = String(severity).toUpperCase();
             if (sev === "CRITICAL") return 25;
             if (sev === "WARNING") return 50;
-            if (sev === "INVESTIGATIVE") return 65;
-            if (sev === "STATISTICS") return 100;
+            if (sev === "INVESTIGATE") return 65;
+            if (sev === "STATISTICAL") return 100;
             return 95;
         }
 
@@ -1669,7 +1680,7 @@ def render_dashboard_data():
 
     investigative_count = len([
         x for x in latest_events
-        if str(x.get("severity", "")).upper() == "INVESTIGATIVE"
+        if str(x.get("severity", "")).upper() == "INVESTIGATE"
     ])
 
     info_count = len([
@@ -1679,7 +1690,7 @@ def render_dashboard_data():
 
     statistics_count = len([
         x for x in latest_events
-        if str(x.get("severity", "")).upper() == "STATISTICS"
+        if str(x.get("severity", "")).upper() == "STATISTICAL"
     ])
 
     # Producer status check
