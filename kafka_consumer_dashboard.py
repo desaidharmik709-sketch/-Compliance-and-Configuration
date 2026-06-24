@@ -886,47 +886,8 @@ def write_static_html():
             </div>
 
             <div class="content">
-                <!-- Navigation Tabs -->
-                <div class="nav-tabs">
-                    <button id="nav-btn-stream" class="nav-tab active" onclick="switchNavTab('stream')">📡 Event Stream</button>
-                    <button id="nav-btn-compliance" class="nav-tab" onclick="switchNavTab('compliance')">📊 Compliance Posture</button>
-                </div>
-
-                <!-- VIEW 1: Live Event Stream -->
-                <div id="view-stream">
-                    <h2>📡 Real-time Event Stream (Live)</h2>
-                    
-                    <!-- Framework Scroll Bar -->
-                    <div class="framework-scroll-container" id="framework-scroll-bar">
-                        <button data-framework="ALL" class="framework-card-btn active" onclick="filterFramework('ALL')">
-                            <h4>All Frameworks</h4>
-                            <span id="fw-count-ALL">0 logs</span>
-                        </button>
-                        <button data-framework="NIST" class="framework-card-btn" onclick="filterFramework('NIST')">
-                            <h4>NIST</h4>
-                            <span id="fw-count-NIST">0 logs</span>
-                        </button>
-                        <button data-framework="PCI DSS" class="framework-card-btn" onclick="filterFramework('PCI DSS')">
-                            <h4>PCI DSS</h4>
-                            <span id="fw-count-PCI-DSS">0 logs</span>
-                        </button>
-                        <button data-framework="DPDP" class="framework-card-btn" onclick="filterFramework('DPDP')">
-                            <h4>DPDP</h4>
-                            <span id="fw-count-DPDP">0 logs</span>
-                        </button>
-                        <button data-framework="SYSTEM" class="framework-card-btn" onclick="filterFramework('SYSTEM')">
-                            <h4>SYSTEM</h4>
-                            <span id="fw-count-SYSTEM">0 logs</span>
-                        </button>
-                        <button data-framework="HARDWARE" class="framework-card-btn" onclick="filterFramework('HARDWARE')">
-                            <h4>HARDWARE</h4>
-                            <span id="fw-count-HARDWARE">0 logs</span>
-                        </button>
-                        <button data-framework="ENDPOINT" class="framework-card-btn" onclick="filterFramework('ENDPOINT')">
-                            <h4>ENDPOINT</h4>
-                            <span id="fw-count-ENDPOINT">0 logs</span>
-                        </button>
-                    </div>
+                <!-- Navigation Tabs Removed for Focus -->
+                <!-- Framework UI Removed -->
 
                     <div class="tabs">
                         <button data-severity="ALL" class="active" onclick="filterSeverity('ALL')">All</button>
@@ -953,7 +914,6 @@ def write_static_html():
                                 <th>Date & Time</th>
                                 <th>Event Summary</th>
                                 <th>Severity</th>
-                                <th>Compliance %</th>
                             </tr>
                         </thead>
                         <tbody id="event-table-body">
@@ -962,144 +922,18 @@ def write_static_html():
                     </table>
                 </div>
 
-                <!-- VIEW 2: Compliance Posture Report -->
-                <div id="view-compliance" style="display: none;">
-                    <h2>📊 Compliance Posture Report</h2>
-                    
-                    <!-- Report Summary Widget -->
-                    <div id="report-summary-widget" style="margin-bottom: 25px; padding: 20px; background: rgba(17, 24, 39, 0.45); border: 1px solid var(--border-color); border-left: 4px solid var(--color-total); border-radius: 16px; backdrop-filter: blur(10px);">
-                        <!-- Dynamic report summary goes here -->
-                    </div>
-
-                    <div class="compliance-scores-grid" id="compliance-scores-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 25px;">
-                        <!-- Dynamic framework score cards go here -->
-                    </div>
-                    
-                    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 12px; background: rgba(17, 24, 39, 0.4); padding: 12px 20px; border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.05); width: fit-content;">
-                        <label for="frameworkFilterSelect" style="font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #9ca3af;">Filter Framework:</label>
-                        <select id="frameworkFilterSelect" onchange="renderComplianceReport()" style="background: rgba(17, 24, 39, 0.85); color: white; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 6px 16px; font-family: inherit; font-size: 13px; font-weight: 700; outline: none; cursor: pointer; transition: all 0.3s;">
-                            <option value="ALL">All Frameworks</option>
-                            <option value="NIST">NIST</option>
-                            <option value="PCI DSS">PCI DSS</option>
-                            <option value="DPDP">DPDP</option>
-                            <option value="SYSTEM">SYSTEM</option>
-                            <option value="HARDWARE">HARDWARE</option>
-                            <option value="ENDPOINT">ENDPOINT</option>
-                        </select>
-                    </div>
-
-                    <div id="compliance-rules-list" style="display: flex; flex-direction: column; gap: 12px;">
-                        <!-- Dynamic compliance checks will be loaded here -->
-                    </div>
-                </div>
             </div>
         </div>
     </div>
 
     <script>
         let currentSeverityFilter = 'ALL';
-        let currentFrameworkFilter = 'ALL';
         window.allEvents = [];
-        window.latestReportData = {};
         window.maxDisplayedRows = 100;
         
         window.loadMoreLogs = function() {
             window.maxDisplayedRows += 100;
             renderEventTable();
-        };
-
-        function filterFramework(fw) {
-            currentFrameworkFilter = fw;
-            const buttons = document.querySelectorAll('.framework-card-btn');
-            buttons.forEach(btn => {
-                if (btn.getAttribute('data-framework') === fw) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-            renderEventTable();
-        }
-
-        function showFrameworkLogs(fw) {
-            switchNavTab('stream');
-            filterFramework(fw);
-            const bar = document.getElementById('framework-scroll-bar');
-            if (bar) bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-
-        function renderReportSummary(report) {
-            const container = document.getElementById('report-summary-widget');
-            if (!container) return;
-            
-            if (report && report.summary) {
-                const total = report.summary.total_controls_evaluated || 0;
-                const passed = report.summary.passed || 0;
-                const failed = report.summary.failed || 0;
-                const errors = report.summary.errors || 0;
-                const hostname = report.hostname || 'N/A';
-                const timeStr = report.generated_at ? report.generated_at.replace('T', ' ').substring(0, 19) : 'N/A';
-                
-                container.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
-                        <div>
-                            <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 0.5px;">📋 Host Compliance Posture Result</h3>
-                            <p style="margin: 4px 0 0 0; font-size: 12.5px; color: #9ca3af;">
-                                Hostname: <strong style="color: #38bdf8;">${escapeHTML(hostname)}</strong> &nbsp;|&nbsp; 
-                                Last Evaluated: <strong style="color: #38bdf8;">${escapeHTML(timeStr)} UTC</strong>
-                            </p>
-                        </div>
-                        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                            <div style="background: rgba(3, 7, 18, 0.6); padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); text-align: center; min-width: 90px;">
-                                <span style="font-size: 9px; text-transform: uppercase; color: #9ca3af; font-weight: 700; letter-spacing: 0.5px;">Total Rules</span>
-                                <div style="font-size: 18px; font-weight: 800; color: #ffffff; font-family: 'JetBrains Mono', monospace;">${total}</div>
-                            </div>
-                            <div style="background: rgba(16, 185, 129, 0.1); padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.2); text-align: center; min-width: 90px;">
-                                <span style="font-size: 9px; text-transform: uppercase; color: #10b981; font-weight: 700; letter-spacing: 0.5px;">Passed</span>
-                                <div style="font-size: 18px; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', monospace;">${passed}</div>
-                            </div>
-                            <div style="background: rgba(239, 68, 68, 0.1); padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(239, 68, 68, 0.2); text-align: center; min-width: 90px;">
-                                <span style="font-size: 9px; text-transform: uppercase; color: #ef4444; font-weight: 700; letter-spacing: 0.5px;">Failed</span>
-                                <div style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: 'JetBrains Mono', monospace;">${failed}</div>
-                            </div>
-                            ${errors > 0 ? `
-                            <div style="background: rgba(239, 68, 68, 0.2); padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(239, 68, 68, 0.3); text-align: center; min-width: 90px;">
-                                <span style="font-size: 9px; text-transform: uppercase; color: #f43f5e; font-weight: 700; letter-spacing: 0.5px;">Errors</span>
-                                <div style="font-size: 18px; font-weight: 800; color: #f43f5e; font-family: 'JetBrains Mono', monospace;">${errors}</div>
-                            </div>` : ''}
-                        </div>
-                    </div>
-                `;
-            } else {
-                container.innerHTML = `
-                    <div style="text-align: center; color: #9ca3af; font-size: 13px; padding: 10px;">
-                        Waiting for compliance report data...
-                    </div>
-                `;
-            }
-        }
-
-        const RULE_MAPPINGS = {
-            "t10_corr_01": { id: "T10-CORR-01", framework: "SYSTEM", control: "Software to Service Vulnerability Mapping", desc: "Correlates active installed software against running services to identify running unmapped services." },
-            "t10_corr_02": { id: "T10-CORR-02", framework: "SYSTEM", control: "Persistence Threat Intel Enrichment", desc: "Correlates autoruns and scheduled tasks against threat intelligence actors/reputations." },
-            "01_installed_software": { id: "01_installed_software", framework: "SYSTEM", control: "Installed Software Inventory", desc: "Verifies installed software packages against blacklist policy (e.g. uTorrent, BitTorrent, TeamViewer)." },
-            "04_hardware_inventory": { id: "04_hardware_inventory", framework: "SYSTEM", control: "Hardware Asset Inventory", desc: "Audits hardware motherboard, manufacturer, model, and system details." },
-            "05_windows_services": { id: "05_windows_services", framework: "SYSTEM", control: "Windows Service Enumeration", desc: "Checks that core baseline windows services are running (e.g. Windows Defender, Firewall)." },
-            "06_failed_logins": { id: "AC-7", framework: "NIST", control: "Failed Login Monitoring", desc: "Tracks brute-force logon attempts by auditing Security Event ID 4625." },
-            "07_successful_logins": { id: "AU-2", framework: "NIST", control: "Successful Login Auditing", desc: "Audits system access credentials and authentication events (Event ID 4624)." },
-            "10_firewall_configuration": { id: "PCI-1.4", framework: "PCI DSS", control: "Firewall Configuration", desc: "Enforces that all 3 local Windows Firewall profiles (Domain, Private, Public) are active." },
-            "12_registry_autoruns": { id: "SI-7", framework: "NIST", control: "Registry Autorun Monitoring", desc: "Checks startup registry hives for suspicious file names, paths, or scripts." },
-            "13_scheduled_tasks": { id: "AU-12-ST", framework: "DPDP", control: "Scheduled Task Monitoring", desc: "Monitors active scheduled tasks for suspicious binaries or wscript/cscript executions." },
-            "16_user_accounts_and_privileges": { id: "AC-6", framework: "NIST", control: "Privileged Account Monitoring", desc: "Scans active user accounts in the administrators group." },
-            "17_windows_defender_status": { id: "PCI-5.2", framework: "PCI DSS", control: "Endpoint Protection", desc: "Verifies if Windows Defender real-time protection is enabled." },
-            "20_boot_shutdown_events": { id: "AU-5", framework: "NIST", control: "System Boot Monitoring", desc: "Audits log records for system start (Event 6005) and shutdown (Event 6006) events." },
-            "21_audit_policy_configuration": { id: "AU-6", framework: "NIST", control: "Audit Policy Monitoring", desc: "Audits default local policy logging settings for login/logout and privilege changes." },
-            "22_drivers_inventory": { id: "DRV-01", framework: "SYSTEM", control: "Driver Tree Inventory Mapping", desc: "Enumerates loaded drivers and maps critical hardware drivers." },
-            "23_more_windows_settings": { id: "WIN-SET", framework: "SYSTEM", control: "Extended Local Subsystem Regulations", desc: "Verifies extended OS configurations like secure boot, credential guard." },
-            "24_usb_direct_connection": { id: "USB-DIR", framework: "HARDWARE", control: "Logical Host Storage Route Identification", desc: "Monitors local host hardware controllers for USB connection states." },
-            "25_bios_snapshot": { id: "BIOS-SNAP", framework: "HARDWARE", control: "Firmware Core Configuration Identifiers", desc: "Checks BIOS vendor version and SMBIOS BIOS snapshot parameters." },
-            "26_windows_scan_history": { id: "SCAN-HIST", framework: "ENDPOINT", control: "Local Threat History Auditing Logs", desc: "Scans Windows Defender active threat logs history." },
-            "27_usb_setting_history": { id: "USB-HIST", framework: "HARDWARE", control: "Historical Peripheral Storage Connectivity Signatures", desc: "Audits historical USB Storage connections from system registry keys." }
         };
 
         function updateClock() {
@@ -1151,15 +985,6 @@ def write_static_html():
             return JSON.stringify(record).substring(0, 120);
         }
 
-        function getCompliancePercentage(severity) {
-            const sev = String(severity).toUpperCase();
-            if (sev === "CRITICAL") return 25;
-            if (sev === "WARNING") return 50;
-            if (sev === "INVESTIGATE") return 65;
-            if (sev === "STATISTICAL") return 100;
-            return 95;
-        }
-
         function containsTerm(obj, term) {
             if (obj === null || obj === undefined) return false;
             if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
@@ -1175,17 +1000,6 @@ def write_static_html():
                 });
             }
             return false;
-        }
-
-        function getRuleForLog(log) {
-            for (let key in RULE_MAPPINGS) {
-                if (log.file_name && log.file_name.includes(key)) {
-                    let rule = Object.assign({}, RULE_MAPPINGS[key]);
-                    rule.datapoint = key;
-                    return rule;
-                }
-            }
-            return null;
         }
 
         function toggleRowDetails(rowElement, logIndex) {
@@ -1204,56 +1018,10 @@ def write_static_html():
             
             rowElement.classList.add('expanded');
             
-            const rule = getRuleForLog(log);
-            let ruleHTML = '';
-            
-            if (rule) {
-                let ruleStatus = 'MANUAL REVIEW';
-                let ruleEvidence = 'No active scan telemetry for this rule.';
-                let statusClass = 'status-warning';
-                
-                if (window.latestReportData && window.latestReportData.findings) {
-                    const findings = window.latestReportData.findings.filter(f => f.datapoint === rule.datapoint);
-                    if (findings && findings.length > 0) {
-                        const failedFinding = findings.find(f => f.status === 'FAIL');
-                        if (failedFinding) {
-                            ruleStatus = 'FAIL';
-                            ruleEvidence = failedFinding.evidence;
-                        } else {
-                            ruleStatus = 'PASS';
-                            ruleEvidence = findings[0].evidence;
-                        }
-                        statusClass = ruleStatus === 'PASS' ? 'status-pass' : 'status-fail';
-                    }
-                }
-                
-                ruleHTML = `
-                    <div class="rule-details-container ${statusClass}" style="margin-bottom: 15px; padding: 15px; border-radius: 8px; border-left: 4px solid var(--border-color); background: rgba(3, 7, 18, 0.4);">
-                        <h4 style="margin: 0 0 6px 0; font-size: 14px; font-weight: 800; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ Mapped Compliance Control</h4>
-                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap;">
-                            <span style="font-size: 12px; font-weight: 700; color: white;">[${rule.id}] ${rule.control}</span>
-                            <span style="font-size: 11px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 8px; border-radius: 10px; font-weight: 700; border: 1px solid rgba(56, 189, 248, 0.2); text-transform: uppercase;">Framework: ${rule.framework}</span>
-                             <span class="badge-${ruleStatus.toLowerCase().replace(/\\s+/g, '-')}" style="font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 10px;">Rule Status: ${ruleStatus}</span>
-                        </div>
-                        <p style="margin: 0 0 8px 0; font-size: 12.5px; color: #cbd5e1; line-height: 1.4;">${rule.desc}</p>
-                        <div style="background: #030712; padding: 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.03); margin-top: 8px;">
-                            <pre style="margin: 0; font-size: 10.5px; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; word-break: break-all; white-space: pre-wrap;"><strong style="color: #38bdf8;">Scan Evidence:</strong> ${escapeHTML(ruleEvidence)}</pre>
-                        </div>
-                    </div>
-                `;
-            } else {
-                ruleHTML = `
-                    <div style="margin-bottom: 15px; padding: 12px; border-radius: 6px; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.15); color: #fde047; font-size: 12.5px;">
-                        No mapped compliance control rule found for this event type.
-                    </div>
-                `;
-            }
-            
             const detailsRow = document.createElement('tr');
             detailsRow.className = 'details-row';
             detailsRow.innerHTML = `
-                <td colspan="5" style="padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); box-shadow: inset 0 2px 10px rgba(0,0,0,0.6);">
-                    ${ruleHTML}
+                <td colspan="4" style="padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); box-shadow: inset 0 2px 10px rgba(0,0,0,0.6);">
                     <div style="margin-top: 5px;">
                         <h4 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 800; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">📋 Raw Event Payload</h4>
                         <div style="background: #030712; padding: 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.03); max-height: 300px; overflow-y: auto;">
@@ -1284,12 +1052,6 @@ def write_static_html():
                     return;
                 }
 
-                const rule = getRuleForLog(log);
-                const framework = rule ? rule.framework : 'NONE';
-                if (currentFrameworkFilter !== 'ALL' && framework !== currentFrameworkFilter) {
-                    return;
-                }
-
                 if (query && !containsTerm(log, query)) {
                     return;
                 }
@@ -1297,9 +1059,7 @@ def write_static_html():
                 renderedCount++;
                 const record = log.record || log;
                 const summary = getEventSummary(record);
-                const compliance = getCompliancePercentage(severity);
                 const severityClass = severity.toLowerCase();
-                const progressClass = `${severityClass}-fill`;
 
                 rowsHTML += `
                     <tr data-severity="${severity}" onclick="toggleRowDetails(this, ${index})" style="cursor: pointer;">
@@ -1307,19 +1067,12 @@ def write_static_html():
                         <td>${escapeHTML(log.timestamp || 'N/A')}</td>
                         <td style="word-break: break-all;">${escapeHTML(summary)}</td>
                         <td class="severity-${severityClass}">${escapeHTML(severity)}</td>
-                        <td>
-                            <div class="progress-bar">
-                                <div class="progress-fill ${progressClass}" style="width:${compliance}%">
-                                    ${compliance}%
-                                </div>
-                            </div>
-                        </td>
                     </tr>
                 `;
             });
             
             if (renderedCount >= window.maxDisplayedRows) {
-                rowsHTML += `<tr><td colspan="5" style="text-align: center; padding: 15px;">
+                rowsHTML += `<tr><td colspan="4" style="text-align: center; padding: 15px;">
                     <button onclick="window.loadMoreLogs()" style="background: rgba(56, 189, 248, 0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: 'Outfit', sans-serif;">Load Next 100 Logs</button>
                 </td></tr>`;
             }
@@ -1340,145 +1093,6 @@ def write_static_html():
             });
 
             renderEventTable();
-        }
-
-        function switchNavTab(tabName) {
-            const streamBtn = document.getElementById('nav-btn-stream');
-            const complianceBtn = document.getElementById('nav-btn-compliance');
-            const streamView = document.getElementById('view-stream');
-            const complianceView = document.getElementById('view-compliance');
-            
-            if (tabName === 'stream') {
-                streamBtn.className = 'nav-tab active';
-                complianceBtn.className = 'nav-tab';
-                streamView.style.display = 'block';
-                complianceView.style.display = 'none';
-            } else {
-                streamBtn.className = 'nav-tab';
-                complianceBtn.className = 'nav-tab active';
-                streamView.style.display = 'none';
-                complianceView.style.display = 'block';
-                renderComplianceReport();
-            }
-        }
-
-        function renderFrameworkScores(report) {
-            const container = document.getElementById('compliance-scores-container');
-            if (!container) return;
-            
-            let html = '';
-            if (report && report.scores) {
-                for (let fw in report.scores) {
-                    const score = report.scores[fw];
-                    let scoreColor = '#10b981';
-                    if (score < 50) scoreColor = '#ef4444';
-                    else if (score < 80) scoreColor = '#f59e0b';
-                    
-                    html += `
-                        <div class="metric-card" style="border-left: 3px solid ${scoreColor}; cursor: pointer;" onclick="showFrameworkLogs('${escapeHTML(fw)}')">
-                            <h3>${escapeHTML(fw)} Score</h3>
-                            <p style="color: ${scoreColor}; font-size: 28px;">${score}%</p>
-                            <span style="font-size: 10px; color: #9ca3af; margin-top: 5px; display: block; text-transform: uppercase; letter-spacing: 0.5px;">Click to view logs</span>
-                        </div>
-                    `;
-                }
-            } else {
-                html = `
-                    <div style="grid-column: 1 / -1; padding: 15px; background: rgba(255,255,255,0.02); text-align: center; border-radius: 8px; color: #9ca3af; font-size: 13.5px;">
-                        No compliance posture scores available. Run report_generator.py to generate score calculations.
-                    </div>
-                `;
-            }
-            container.innerHTML = html;
-        }
-
-        function toggleRuleAccordion(headerElement) {
-            const card = headerElement.parentElement;
-            const body = card.querySelector('.rule-body');
-            const chevron = card.querySelector('.chevron');
-            
-            if (body.style.display === 'none') {
-                body.style.display = 'block';
-                chevron.style.transform = 'rotate(180deg)';
-                card.style.borderColor = 'rgba(56, 189, 248, 0.3)';
-            } else {
-                body.style.display = 'none';
-                chevron.style.transform = 'rotate(0deg)';
-                card.style.borderColor = 'rgba(255, 255, 255, 0.05)';
-            }
-        }
-
-        function renderComplianceReport() {
-            const container = document.getElementById('compliance-rules-list');
-            const select = document.getElementById('frameworkFilterSelect');
-            const filter = select ? select.value : 'ALL';
-            if (!container) return;
-            
-            let html = '';
-            let rulesList = [];
-            
-            if (window.latestReportData && window.latestReportData.findings) {
-                rulesList = window.latestReportData.findings.map(f => ({
-                    id: f.control_id,
-                    framework: f.framework,
-                    control: f.control_description,
-                    desc: "Remediation: " + f.remediation,
-                    status: f.status,
-                    evidence: f.evidence
-                }));
-            }
-            
-            rulesList.sort((a,b) => {
-                if (a.framework !== b.framework) return a.framework.localeCompare(b.framework);
-                return a.id.localeCompare(b.id);
-            });
-            
-            let renderedCount = 0;
-            
-            rulesList.forEach(rule => {
-                if (filter !== 'ALL' && !rule.framework.includes(filter)) {
-                    return;
-                }
-                
-                renderedCount++;
-                
-                let status = rule.status;
-                let evidence = rule.evidence;
-                let badgeClass = `badge-${status.toLowerCase().replace(/\\s+/g, '-')}`;
-                let statusClass = status === 'PASS' ? 'status-pass' : (status === 'FAIL' ? 'status-fail' : 'status-warning');
-                
-                html += `
-                    <div class="compliance-rule-card ${statusClass}" style="background: rgba(17, 24, 39, 0.4); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; overflow: hidden; margin-bottom: 10px; transition: all 0.3s ease;">
-                        <div style="padding: 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="toggleRuleAccordion(this)">
-                            <div style="display: flex; align-items: center; gap: 12px; text-align: left; flex-wrap: wrap;">
-                                <span class="${badgeClass}" style="padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;">${status}</span>
-                                <div>
-                                    <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: #ffffff;">${escapeHTML(rule.control)}</h4>
-                                    <span style="font-size: 11px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">Rule: ${rule.id} | Framework: ${rule.framework}</span>
-                                </div>
-                            </div>
-                            <span class="chevron" style="font-size: 10px; color: #9ca3af; transition: transform 0.2s;">▼</span>
-                        </div>
-                        <div class="rule-body" style="display: none; padding: 0 16px 16px 16px; border-top: 1px solid rgba(255, 255, 255, 0.05); background: rgba(3, 7, 18, 0.4);">
-                            <div style="margin-top: 12px; text-align: left;">
-                                <p style="margin: 0 0 8px 0; font-size: 13px; color: #cbd5e1; line-height: 1.4;">${escapeHTML(rule.desc)}</p>
-                                <div style="background: #030712; padding: 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.03); margin-top: 8px;">
-                                    <pre style="margin: 0; font-size: 11px; color: #cbd5e1; font-family: 'JetBrains Mono', monospace; word-break: break-all; white-space: pre-wrap;"><strong style="color: #38bdf8;">Evidence Gathered:</strong> ${escapeHTML(evidence)}</pre>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            if (renderedCount === 0) {
-                html = `
-                    <div style="padding: 20px; background: rgba(255,255,255,0.02); text-align: center; border-radius: 8px; color: #9ca3af; font-size: 13.5px;">
-                        No rules found for framework: ${escapeHTML(filter)}.
-                    </div>
-                `;
-            }
-            container.innerHTML = html;
         }
 
         function updateUI(data) {
@@ -1558,38 +1172,8 @@ def write_static_html():
 
             // Save events and render table
             window.allEvents = data.latest_events || [];
-
-            // Update framework counts dynamically
-            const counts = { ALL: window.allEvents.length, NIST: 0, "PCI DSS": 0, DPDP: 0, SYSTEM: 0, HARDWARE: 0, ENDPOINT: 0 };
-            window.allEvents.forEach(log => {
-                const rule = getRuleForLog(log);
-                if (rule && rule.framework in counts) {
-                    counts[rule.framework]++;
-                }
-            });
             
-            if (document.getElementById('fw-count-ALL')) {
-                document.getElementById('fw-count-ALL').innerText = `${counts.ALL} logs`;
-                document.getElementById('fw-count-NIST').innerText = `${counts.NIST} logs`;
-                document.getElementById('fw-count-PCI-DSS').innerText = `${counts['PCI DSS']} logs`;
-                document.getElementById('fw-count-DPDP').innerText = `${counts.DPDP} logs`;
-                document.getElementById('fw-count-SYSTEM').innerText = `${counts.SYSTEM} logs`;
-                document.getElementById('fw-count-HARDWARE').innerText = `${counts.HARDWARE} logs`;
-                document.getElementById('fw-count-ENDPOINT').innerText = `${counts.ENDPOINT} logs`;
-            }
-
             renderEventTable();
-
-            // Save and render latest compliance report data
-            window.latestReportData = data.latest_report || {};
-            renderReportSummary(window.latestReportData);
-            renderFrameworkScores(window.latestReportData);
-            
-            // Only update compliance list when view is active to avoid resetting user accordion toggle
-            const complianceView = document.getElementById('view-compliance');
-            if (complianceView && complianceView.style.display === 'block') {
-                renderComplianceReport();
-            }
         }
 
         function reloadDataScript() {
@@ -1698,10 +1282,10 @@ def render_dashboard_data():
     # Producer status check
     now_ts = datetime.now().timestamp()
     producer_active = False
-    if latest_events:
-        latest_received_at = latest_events[0].get("received_at", 0)
-        if now_ts - latest_received_at < 15:
-            producer_active = True
+    
+    # We use the raw last_message_received_time tracked at the very top of the loop
+    if 'last_message_received_time' in globals() and now_ts - last_message_received_time < 15:
+        producer_active = True
 
     # Locate and load the latest compliance report
     reports_dir = Path("reports")
@@ -1740,8 +1324,9 @@ consumer = KafkaConsumer(
     "compliance-data",
     bootstrap_servers="localhost:9092",
     auto_offset_reset="latest",
-    group_id="dashboard-group",
-    value_deserializer=lambda x: json.loads(x.decode("utf-8"))
+    group_id="dashboard-group-" + str(int(time.time())), # Unique group ID ensures we never hang on rebalance
+    value_deserializer=lambda x: json.loads(x.decode("utf-8")),
+    consumer_timeout_ms=1000 # Unblock iterator every 1 second
 )
 
 # Write baseline files on startup
@@ -1753,67 +1338,72 @@ print("Listening for Kafka messages... (All history will be kept on disk in repo
 last_render_time = 0
 needs_render = False
 last_gc_time = time.time()
+last_message_received_time = 0
 
 # Main consume loop
-for message in consumer:
-    data = message.value
-    
-    file_name = data.get("event_id", data.get("file_name", "unknown"))
-    payload_data = data.get("record", {})
-
-    # Duplicate detection
-    try:
-        # Include metadata in the unique hash to prevent ignoring valid events 
-        # from different files or timestamps that happen to have identical stdout
-        unique_id = {
-            "file_name": data.get("file_name", ""),
-            "event_id": data.get("event_id", ""),
-            "timestamp": data.get("timestamp", ""),
-            "record": payload_data
-        }
-        unique_hash = json.dumps(unique_id, sort_keys=True, default=str)
-        if unique_hash in seen_hashes:
-            continue
+while True:
+    for message in consumer:
+        data = message.value
         
-        seen_hashes.add(unique_hash)
-        seen_hashes_list.append(unique_hash)
-    except Exception:
-        pass
+        last_message_received_time = time.time()
+        
+        file_name = data.get("event_id", data.get("file_name", "unknown"))
+        payload_data = data.get("record", {})
 
-    # Timestamp handling
-    if "timestamp" not in data or not data["timestamp"]:
-        data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Duplicate detection
+        try:
+            unique_id = {
+                "file_name": data.get("file_name", ""),
+                "event_id": data.get("event_id", ""),
+                "timestamp": data.get("timestamp", ""),
+                "record": payload_data
+            }
+            unique_hash = json.dumps(unique_id, sort_keys=True, default=str)
+            if unique_hash in seen_hashes:
+                continue
+            
+            seen_hashes.add(unique_hash)
+            seen_hashes_list.append(unique_hash)
+        except Exception:
+            pass
 
-    # Record receipt epoch for active producer detection
-    data["received_at"] = datetime.now().timestamp()
+        # Timestamp handling
+        if "timestamp" not in data or not data["timestamp"]:
+            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Save to disk append-only log file to preserve all historical events
-    try:
-        with open(history_file, "a", encoding="utf-8") as hf:
-            hf.write(json.dumps(data, ensure_ascii=False) + "\n")
-    except Exception as e:
-        print(f"[ERROR writing history] {e}")
+        # Record receipt epoch for active producer detection
+        data["received_at"] = datetime.now().timestamp()
 
-    # Track overall logs count
-    total_logs_count += 1
+        # Save to disk append-only log file
+        try:
+            with open(history_file, "a", encoding="utf-8") as hf:
+                hf.write(json.dumps(data, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"[ERROR writing history] {e}")
 
-    # In-memory structures (Uncapped as per request)
-    file_logs[file_name].insert(0, data)
+        # Track overall logs count
+        total_logs_count += 1
 
-    latest_events.insert(0, data)
+        # In-memory structures
+        file_logs[file_name].insert(0, data)
+        latest_events.insert(0, data)
+        needs_render = True
+        print(f"[RECEIVED] {file_name}")
 
-    needs_render = True
-
-    # Throttled rendering for CPU/RAM optimization
+        # Throttled rendering for CPU/RAM optimization
+        now_ts = time.time()
+        if needs_render and (now_ts - last_render_time >= 2.0):
+            render_dashboard_data()
+            last_render_time = time.time()
+            needs_render = False
+            
+            # Occasional garbage collection
+            if now_ts - last_gc_time >= 30.0:
+                gc.collect()
+                last_gc_time = now_ts
+                
+    # If no messages received (timeout reached), we still update Producer IDLE status on UI:
     now_ts = time.time()
-    if needs_render and (now_ts - last_render_time >= 2.0):
+    if now_ts - last_render_time >= 2.0:
         render_dashboard_data()
         last_render_time = time.time()
-        needs_render = False
-        
-        # Occasional garbage collection (every 30s instead of every tick to save CPU)
-        if now_ts - last_gc_time >= 30.0:
-            gc.collect()
-            last_gc_time = now_ts
-
-    print(f"[RECEIVED] {file_name}")
