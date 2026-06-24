@@ -198,34 +198,22 @@ def save_json(name, data, event_id="COMP-GENERIC", severity="INFO", event_type="
 
     if active_index is not None:
         active_entry = existing_data[active_index]
-        old_hash = active_entry.get("data_hash")
-
-        if old_hash != data_hash:
-            old_data = active_entry.get("payload_message", {}).get("data")
-            if old_data is not None:
-                legacy_hash = generate_data_hash(old_data)
-                if legacy_hash == data_hash:
-                    old_hash = legacy_hash
-
-        if old_hash == data_hash:
-            existing_data[active_index] = new_entry
-            print(f"[UPDATED] {name} -> Existing active entry replaced.")
-        else:
-            max_num = 0
-            for entry in existing_data:
-                eid = str(entry.get("event_id", ""))
-                if eid.startswith("Previous"):
-                    try:
-                        num = int(eid[8:])
-                        if num > max_num:
-                            max_num = num
-                    except ValueError:
-                        pass
-            next_previous_id = f"Previous{max_num + 1:03d}"
-            
-            active_entry["event_id"] = next_previous_id
-            existing_data.append(new_entry)
-            print(f"[ARCHIVED] {name} -> Previous active entry archived as {next_previous_id}. New entry appended.")
+        
+        max_num = 0
+        for entry in existing_data:
+            eid = str(entry.get("event_id", ""))
+            if eid.startswith("Previous"):
+                try:
+                    num = int(eid[8:])
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    pass
+        next_previous_id = f"Previous{max_num + 1:03d}"
+        
+        active_entry["event_id"] = next_previous_id
+        existing_data.append(new_entry)
+        print(f"[ARCHIVED] {name} -> Previous active entry archived as {next_previous_id}. New entry appended.")
     else:
         existing_data.append(new_entry)
         print(f"[NEW] {name} -> New active entry appended.")
@@ -252,7 +240,7 @@ class SeverityEngine:
 
     @staticmethod
     def get_highest_severity(data):
-        levels = {"INFO": 0, "STATISTICAL": 1, "INVESTIGATE": 2, "CRITICAL": 3}
+        levels = {"INFO": 0, "STATISTICAL": 1, "WARNING": 2, "INVESTIGATE": 3, "CRITICAL": 4}
         highest = "INFO"
         if isinstance(data, dict):
             highest = data.get("Severity", "INFO")
@@ -263,6 +251,70 @@ class SeverityEngine:
                     if levels.get(sev, 0) > levels.get(highest, 0):
                         highest = sev
         return highest
+
+    @staticmethod
+    def process_hardware(data):
+        was_dict = isinstance(data, dict)
+        items = [data] if was_dict else (data if isinstance(data, list) else [])
+        
+        APPROVED_VENDORS = ["Dell Inc.", "Lenovo", "HP", "Microsoft Corporation"]
+        LEGACY_MODELS = ["ProBook 450 G3", "Latitude E5450", "ThinkPad T450"]
+        
+        for r in items:
+            if not isinstance(r, dict): continue
+            
+            manufacturer = str(r.get("Manufacturer", "")).strip()
+            model = str(r.get("Model", "")).strip()
+            total_memory_bytes = r.get("TotalPhysicalMemory", 0)
+            try:
+                total_memory_bytes = int(total_memory_bytes)
+            except (ValueError, TypeError):
+                total_memory_bytes = 0
+            
+            total_memory_gb = total_memory_bytes / (1024 ** 3)
+            
+            if total_memory_bytes > 0:
+                r["TotalPhysicalMemory"] = f"{int(total_memory_bytes / (1024 ** 2))} MB"
+            
+            # Severity removed per user request
+            
+        return data if was_dict else items
+
+    @staticmethod
+    def process_boot_shutdown(data):
+        if not isinstance(data, list): return data
+        for r in data:
+            if not isinstance(r, dict): continue
+            
+            event_id = r.get("EventID")
+            is_update = r.get("IsUpdateReboot", False)
+            is_bsod = r.get("IsBSODReboot", False)
+            is_powerloss = r.get("IsPowerLossReboot", False)
+            
+            if is_powerloss or event_id == 41:
+                sev, reason = "CRITICAL", "Sudden power loss detected"
+            elif is_bsod or event_id == 1001:
+                sev, reason = "CRITICAL", "System crash / Blue Screen of Death"
+            elif event_id == 1074 and is_update:
+                sev, reason = "INFO", "Windows Update Reboot"
+            elif event_id == 1074:
+                sev, reason = "INFO", "Clean User Restart / Shutdown"
+            elif event_id == 6008:
+                sev, reason = "INVESTIGATE", "Unexpected Shutdown"
+            elif event_id in [506, 507]:
+                sev, reason = "INFO", "Modern Standby Transition"
+            else:
+                sev, reason = "STATISTICAL", "Routine System Event"
+                
+            r["Severity"] = sev
+            r["SeverityReason"] = reason
+            r["DetectionParameters"] = {
+                "EventID": event_id, 
+                "IsUpdate": is_update, 
+                "IsBSOD": is_bsod, 
+                "IsPowerLoss": is_powerloss
+            }
+        return data
 
     @staticmethod
     def process_scan_history(data):
@@ -330,16 +382,36 @@ class SeverityEngine:
 
     @staticmethod
     def process_windows_settings(data):
-        if not isinstance(data, dict): return data
-        score = data.get("Score", 100)
-        if score >= 90:
-            sev, reason = "INFO", "Compliant Settings"
-        elif score >= 70:
-            sev, reason = "INVESTIGATE", "Minor Compliance Deviations"
-        else:
-            sev, reason = "CRITICAL", "Major Compliance Deviations"
+        sev = "INFO"
+        reason = "Advanced settings within normal operational baseline"
+        
+        bl = data.get("BitLocker", {})
+        if bl.get("ProtectionStatus") == "Off" or bl.get("ProtectionStatus") == "0":
+            sev, reason = "CRITICAL", "BitLocker Drive Encryption is disabled"
             
-        data["DetectionParameters"] = {"Score": score}
+        net_sec = data.get("NetworkSecurity", {})
+        if net_sec.get("SMB1Enabled") is True:
+            sev, reason = "CRITICAL", "Legacy SMBv1 protocol is enabled"
+        elif net_sec.get("ExposedShares"):
+            sev, reason = "WARNING", "Custom local network shares are exposed"
+        else:
+            wifi = net_sec.get("SavedWiFiProfiles", [])
+            if any(isinstance(w, dict) and w.get("Authentication") in ["Open", "WEP"] for w in wifi):
+                sev, reason = "INVESTIGATE", "Insecure Open/WEP Wi-Fi networks saved"
+            
+        ps_sec = data.get("PowerShellSecurity", {}).get("ExecutionPolicies", {})
+        if ps_sec.get("LocalMachine") in ["Unrestricted", "Bypass"]:
+            sev, reason = "WARNING", "PowerShell Execution Policy allows unrestricted scripts"
+            
+        def_adv = data.get("DefenderAdvanced", {})
+        if def_adv.get("PUAProtection") == 0:
+            sev, reason = "INVESTIGATE", "Potentially Unwanted Application (PUA) protection is disabled"
+            
+        data["DetectionParameters"] = {
+            "BitLockerStatus": bl.get("ProtectionStatus"),
+            "SMB1Enabled": net_sec.get("SMB1Enabled"),
+            "PUAProtection": def_adv.get("PUAProtection")
+        }
         data["Severity"] = sev
         data["SeverityReason"] = reason
         return data
@@ -347,8 +419,19 @@ class SeverityEngine:
     @staticmethod
     def process_software(data):
         if not isinstance(data, list): return data
-        remote_tools = ["anydesk", "teamviewer", "rustdesk", "logmein", "vnc"]
-        dump_tools = ["mimikatz", "psexec", "netcat", "nc.exe", "wireshark", "cain"]
+        remote_tools = [
+            "anydesk", "teamviewer", "rustdesk", "logmein", "vnc", 
+            "ammyy", "gotoassist", "splashtop", "radmin", "supremo", 
+            "remoteutilities", "aeroadmin", "chromeremotedesktop", 
+            "connectwise", "bomgar", "screenconnect"
+        ]
+        dump_tools = [
+            "mimikatz", "nanodump", "dumpert", "cobalt strike", "beacon",
+            "sliver", "havoc", "quasar", "quasarrat", "njrat", "darkcomet",
+            "remcos", "asyncrat", "warzone", "agenttesla", "redline",
+            "vidar", "raccoon", "stealc", "lumma", "ligolo", "ligolo-ng",
+            "chisel", "fscan"
+        ]
         
         for r in data:
             if not isinstance(r, dict): continue
@@ -364,7 +447,7 @@ class SeverityEngine:
                 sev, reason, risk = "INFO", "Legitimate Software", "LOW"
                 
             r["RiskLevel"] = risk
-            r["DetectionParameters"] = {"IsRemoteTool": is_remote, "IsHackTool": is_dump}
+            r["DetectionParameters"] = {"IsRemoteTool": is_remote}
             r["Severity"] = sev
             r["SeverityReason"] = reason
         return data
@@ -495,12 +578,22 @@ class SeverityEngine:
             else:
                 r["AccountStatus"] = "INACTIVE"
                 
-            if enabled and is_admin and days > 90:
-                sev, reason = "CRITICAL", "Dormant Admin Account >90 Days"
-            elif enabled and not is_admin and days > 180:
-                sev, reason = "INVESTIGATE", "Dormant Standard User >180 Days"
+            if enabled == True:
+                if is_admin == True and days > 90:
+                    sev, reason = "CRITICAL", "Dormant Admin Account >90 Days"
+                elif is_admin == True and days > 30:
+                    sev, reason = "WARNING", "Admin Account Inactive >30 Days"
+                elif is_admin == False and days > 180:
+                    sev, reason = "INVESTIGATE", "Dormant Standard User >180 Days"
+                else:
+                    sev, reason = "INFO", "Active, Enabled Account"
             else:
-                sev, reason = "INFO", "Normal Account Status"
+                if is_admin == True:
+                    sev, reason = "INFO", "Disabled Admin Account"
+                elif days > 365:
+                    sev, reason = "STATISTICAL", "Disabled Account Inactive >1 Year"
+                else:
+                    sev, reason = "INFO", "Disabled Standard Account"
                 
             r["DetectionParameters"] = {"DaysInactive": days, "IsAdmin": is_admin, "Enabled": enabled}
             r["Severity"] = sev
@@ -543,7 +636,30 @@ def installed_software():
     Where-Object { $_.DisplayName } | 
     Select-Object DisplayName, DisplayVersion, Publisher, @{Name='InstallDate';Expression={$_.InstallDate}}, InstallLocation, 
     @{Name='EstimatedSizeMB';Expression={if ($_.EstimatedSize) {[math]::Round($_.EstimatedSize / 1024, 2)} else {0}}}, 
-    @{Name='DigitalSignature';Expression={'Unknown'}} |
+    @{Name='DigitalSignature';Expression={
+        $sigStatus = 'Unknown'
+        $path = $null
+        if ($_.DisplayIcon -and $_.DisplayIcon -match '^"?([a-zA-Z]:\\[^,"]+\.(?:exe|dll|sys))') {
+            $path = $matches[1]
+        } elseif ($_.UninstallString -and $_.UninstallString -match '^"?([a-zA-Z]:\\[^,"]+\.(?:exe|dll|sys))') {
+            $path = $matches[1]
+        }
+        
+        if (-not $path -and $_.InstallLocation -and (Test-Path -LiteralPath $_.InstallLocation -PathType Container -ErrorAction SilentlyContinue)) {
+            $exe = Get-ChildItem -LiteralPath $_.InstallLocation -Filter *.exe -File -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe) {
+                $path = $exe.FullName
+            }
+        }
+        
+        if ($path -and (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue)) {
+            $sig = (Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue).Status
+            if ($null -ne $sig) { $sigStatus = $sig -as [string] }
+        } else {
+            $sigStatus = 'NoExecutableFound'
+        }
+        $sigStatus
+    }} |
     ConvertTo-Json -Depth 3
     """)
 
@@ -712,8 +828,111 @@ def defender_status():
 
 def boot_shutdown():
     return run_ps(r"""
-    Get-WinEvent -FilterHashtable @{LogName='System';ID=6005,6006} -ErrorAction SilentlyContinue |
-    Select-Object TimeCreated, Id, ProviderName, MachineName | ConvertTo-Json -Depth 3
+    $events = Get-WinEvent -FilterHashtable @{LogName='System';ID=6005,6006,1074,6008,1001,41,506,507} -MaxEvents 50 -ErrorAction SilentlyContinue
+    $out = @()
+    if ($events) {
+        foreach ($e in $events) {
+            $msg = $e.Message
+            $xml = [xml]$e.ToXml()
+            $eventData = @{}
+            if ($xml.Event.EventData.Data) {
+                $xml.Event.EventData.Data | ForEach-Object { $eventData[$_.Name] = $_.'#text' }
+            }
+
+            $causeReboot = ""
+            $causeShutdown = ""
+            $initProcess = ""
+            $initExe = ""
+            $initCmd = ""
+            $initService = ""
+            $loggedUser = ""
+            $respUser = ""
+
+            $isUpdate = $false
+            $isPatch = $false
+            $isDriver = $false
+            $isApp = $false
+            $isCrash = $false
+            $isUnexpected = $false
+            $isBSOD = $false
+            $isPowerLoss = $false
+
+            if ($e.Id -eq 1074) {
+                $reason = if ($eventData['param3']) { $eventData['param3'] } else { "" }
+                $comment = if ($eventData['param6']) { $eventData['param6'] } else { "" }
+                $combinedCause = ($reason + " " + $comment).Trim()
+                
+                $shutdownType = if ($eventData['param5']) { $eventData['param5'] } else { "" }
+                if ($shutdownType -match "restart") {
+                    $causeReboot = $combinedCause
+                } else {
+                    $causeShutdown = $combinedCause
+                }
+                
+                $initExe = if ($eventData['param1']) { $eventData['param1'] } else { "" }
+                $initCmd = $initExe
+                $loggedUserRaw = if ($eventData['param7']) { $eventData['param7'] } else { "" }
+                $loggedUser = if ($loggedUserRaw -match ".*\\(.*)") { $matches[1] } else { $loggedUserRaw }
+                $respUser = $loggedUser
+                
+                if ($initExe -match "svchost.exe") { $initService = "System Service" }
+                elseif ($initExe -match "wuauclt.exe|TiWorker.exe|trustedinstaller.exe") { 
+                    $isUpdate = $true
+                    $isPatch = $true
+                }
+                elseif ($initExe -match "msiexec.exe") { $isApp = $true }
+            }
+            elseif ($e.Id -eq 6008) {
+                $isUnexpected = $true
+                $causeShutdown = "Unexpected Shutdown"
+                $isCrash = $true
+            }
+            elseif ($e.Id -eq 1001) {
+                $isCrash = $true
+                $isBSOD = $true
+                $causeReboot = "BugCheck"
+            }
+            elseif ($e.Id -eq 41) {
+                $isPowerLoss = $true
+                $isUnexpected = $true
+                $causeShutdown = "Power Loss or Unclean Shutdown"
+            }
+
+            if ($msg -match "Windows Update") { $isUpdate = $true; $isPatch = $true }
+            if ($msg -match "driver") { $isDriver = $true }
+            
+            if ($e.Id -eq 6005) { $causeReboot = "Event Log Service Started (Boot)" }
+            if ($e.Id -eq 6006) { $causeShutdown = "Event Log Service Stopped (Shutdown)" }
+            if ($e.Id -eq 506) { $causeShutdown = "Entering Modern Standby (Sleep/Hibernate)" }
+            if ($e.Id -eq 507) { $causeReboot = "Exiting Modern Standby (Wake)" }
+
+            $out += @{
+                EventTime = $e.TimeCreated.ToString("dd-MM-yyyy hh:mm:ss tt")
+                CollectionTime = (Get-Date).ToString("dd-MM-yyyy hh:mm:ss tt")
+                EventID = $e.Id
+                EventProvider = if ($e.ProviderName -eq "User32") { "User ($loggedUser)" } else { $e.ProviderName }
+                ComputerName = $e.MachineName
+                RebootCause = $causeReboot
+                ShutdownCause = $causeShutdown
+                ProcessThatInitiated = $initExe
+                ExecutableThatInitiated = $initExe
+                CommandThatInitiated = $initCmd
+                ServiceThatInitiated = $initService
+                UserLoggedOn = $loggedUser
+                UserWhoInitiated = $respUser
+                UserBooted = $loggedUser
+                IsUpdateReboot = $isUpdate
+                IsPatchReboot = $isPatch
+                IsDriverReboot = $isDriver
+                IsAppReboot = $isApp
+                IsCrashReboot = $isCrash
+                IsUnexpectedReboot = $isUnexpected
+                IsBSODReboot = $isBSOD
+                IsPowerLossReboot = $isPowerLoss
+            }
+        }
+    }
+    $out | ConvertTo-Json -Depth 3
     """)
 
 def audit_policy():
@@ -818,20 +1037,189 @@ def drivers_inventory():
 
 def more_windows_settings():
     return run_ps(r"""
-    $uac = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue
+    $out = @{}
+
+    # 1. Defender Preferences
+    $mp = Get-MpPreference -ErrorAction SilentlyContinue
+    if ($mp) {
+        $out.DefenderAdvanced = @{
+            NetworkProtection = $mp.EnableNetworkProtection
+            ControlledFolderAccess = $mp.EnableControlledFolderAccess
+            PUAProtection = $mp.PUAProtection
+            AttackSurfaceReduction = ($mp.AttackSurfaceReductionRules_Ids -join ',')
+            EmailScanning = if ($mp.DisableEmailScanning) { $false } else { $true }
+            ArchiveScanning = if ($mp.DisableArchiveScanning) { $false } else { $true }
+            IOAVProtection = if ($mp.DisableIOAVProtection) { $false } else { $true }
+            ScriptScanning = if ($mp.DisableScriptScanning) { $false } else { $true }
+        }
+    }
+
+    # 2. Advanced Device Security
+    $dep = Get-ProcessMitigation -System -ErrorAction SilentlyContinue
+    if ($dep) {
+        $out.DeviceSecurityAdvanced = @{
+            DEP = $dep.Dep.Enable
+            ASLR = $dep.Aslr.EnableBottomUpRandomization
+            CFG = $dep.Payload.EnableExportAddressFilter
+        }
+    }
+
+    # 3. BitLocker
+    $bl = Get-BitLockerVolume -MountPoint "C:" -ErrorAction SilentlyContinue
+    $out.BitLocker = @{
+        ProtectionStatus = if ($bl) { $bl.ProtectionStatus.ToString() } else { "Unknown" }
+        EncryptionPercentage = if ($bl) { $bl.EncryptionPercentage } else { 0 }
+        EncryptionMethod = if ($bl) { $bl.EncryptionMethod.ToString() } else { "None" }
+    }
+
+    # 4. Advanced Firewall
+    $fwProfiles = Get-NetFirewallProfile -ErrorAction SilentlyContinue
+    $fwData = @{}
+    if ($fwProfiles) {
+        foreach ($p in $fwProfiles) {
+            $fwData[$p.Name] = @{
+                DefaultInbound = $p.DefaultInboundAction.ToString()
+                DefaultOutbound = $p.DefaultOutboundAction.ToString()
+                LogAllowed = $p.LogAllowed.ToString()
+                LogBlocked = $p.LogBlocked.ToString()
+            }
+        }
+        $out.AdvancedFirewall = $fwData
+    }
+
+    # 5. Windows Update Policies
+    $wu = Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -ErrorAction SilentlyContinue
+    $out.WindowsUpdateAdvanced = @{
+        AUOptions = if ($null -ne $wu.AUOptions) { $wu.AUOptions } else { "Not Configured" }
+        UseWUServer = if ($null -ne $wu.UseWUServer) { $wu.UseWUServer } else { 0 }
+    }
+
+    # 6. Account Policies
+    $netAcc = net accounts 2>$null
+    if ($netAcc) {
+        $out.AccountPolicies = @{
+            LockoutThreshold = if ($netAcc -match "Lockout threshold:") { ($netAcc -match "Lockout threshold:")[0].Split(":")[1].Trim() } else { "Unknown" }
+            MinPasswordLength = if ($netAcc -match "Minimum password length:") { ($netAcc -match "Minimum password length:")[0].Split(":")[1].Trim() } else { "Unknown" }
+            MaxPasswordAge = if ($netAcc -match "Maximum password age") { ($netAcc -match "Maximum password age")[0].Split(":")[1].Trim() } else { "Unknown" }
+            PasswordHistory = if ($netAcc -match "Length of password history maintained:") { ($netAcc -match "Length of password history maintained:")[0].Split(":")[1].Trim() } else { "Unknown" }
+        }
+    }
+
+    # 7. Audit Policy (Full)
+    $audit = auditpol /get /category:* 2>$null | Select-Object -Skip 2
+    $auditDict = @{}
+    if ($audit) {
+        foreach ($line in $audit) {
+            if ($line.Trim() -eq "") { continue }
+            if (-not $line.Contains("  ")) {
+                # Category skipped
+            } else {
+                $parts = $line -split "  +"
+                if ($parts.Count -ge 2) {
+                    $auditDict[$parts[0].Trim()] = $parts[-1].Trim()
+                }
+            }
+        }
+        $out.FullAuditPolicy = $auditDict
+    }
+
+    # 8. Event Log Config
+    $logs = Get-EventLog -List -ErrorAction SilentlyContinue
+    $logData = @{}
+    if ($logs) {
+        foreach ($l in $logs) {
+            if ($l.Log -in @("Security", "System", "Application")) {
+                $logData[$l.Log] = @{
+                    MaxKB = $l.MaximumKilobytes
+                    Retention = $l.MinimumRetentionDays
+                    OverflowAction = $l.OverflowAction.ToString()
+                }
+            }
+        }
+        $out.EventLogConfig = $logData
+    }
+
+    # 9. Network Security
+    $smb = Get-SmbServerConfiguration -ErrorAction SilentlyContinue
+    $shares = Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^\w`$" -and $_.Name -ne "IPC$" -and $_.Name -ne "ADMIN$" -and $_.Name -ne "print$" }
+    $shareList = @()
+    if ($shares) { foreach ($s in $shares) { $shareList += $s.Name } }
+    
+    $wifiList = @()
+    $wifiProfs = netsh wlan show profiles 2>$null | Select-String "All User Profile"
+    if ($wifiProfs) {
+        foreach ($p in $wifiProfs) {
+            $profName = ($p -split ":")[1].Trim()
+            $authLine = netsh wlan show profile name="$profName" 2>$null | Select-String "Authentication"
+            $auth = if ($authLine) { $authLine.Line.Split(":")[1].Trim() } else { "Unknown" }
+            $wifiList += @{ SSID = $profName; Authentication = $auth }
+        }
+    }
+
+    if ($smb) {
+        $out.NetworkSecurity = @{
+            SMB1Enabled = $smb.EnableSMB1Protocol
+            SMB2Enabled = $smb.EnableSMB2Protocol
+            RequireSecuritySignature = $smb.RequireSecuritySignature
+            ExposedShares = $shareList
+            SavedWiFiProfiles = $wifiList
+        }
+    }
+
+    # 10. Remote Access
+    $ssh = Get-Service sshd -ErrorAction SilentlyContinue
+    $winrm = Get-Service WinRM -ErrorAction SilentlyContinue
+    $out.RemoteAccess = @{
+        SSHServerRunning = if ($ssh) { $ssh.Status -eq 'Running' } else { $false }
+        WinRMRunning = if ($winrm) { $winrm.Status -eq 'Running' } else { $false }
+    }
+
+    # 11. PowerShell Security
+    $psExec = Get-ExecutionPolicy -List -ErrorAction SilentlyContinue
+    $psData = @{}
+    if ($psExec) {
+        foreach ($p in $psExec) { $psData[$p.Scope.ToString()] = $p.ExecutionPolicy.ToString() }
+        $out.PowerShellSecurity = @{ ExecutionPolicies = $psData }
+    }
+
+    # 12. Browser Security
+    $edge = Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -ErrorAction SilentlyContinue
+    $out.BrowserSecurity = @{
+        SmartScreenEnabled = if ($null -ne $edge.SmartScreenEnabled) { $edge.SmartScreenEnabled } else { "Not Configured" }
+        PasswordManagerEnabled = if ($null -ne $edge.PasswordManagerEnabled) { $edge.PasswordManagerEnabled } else { "Not Configured" }
+    }
+
+    # 13. Storage Policies
+    $usbWrite = Get-ItemProperty "HKLM:\System\CurrentControlSet\Control\StorageDevicePolicies" -ErrorAction SilentlyContinue
+    $out.StoragePolicies = @{
+        USBWriteProtection = if ($null -ne $usbWrite.WriteProtect) { $usbWrite.WriteProtect } else { 0 }
+    }
+
+    # 14. Installed Security Products
+    $av = Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue
+    $fw = Get-CimInstance -Namespace root\SecurityCenter2 -ClassName FirewallProduct -ErrorAction SilentlyContinue
+    $out.InstalledSecurityProducts = @{
+        AntiVirus = if ($av) { ($av.displayName) -join ", " } else { "None Detected" }
+        Firewall = if ($fw) { ($fw.displayName) -join ", " } else { "None Detected" }
+    }
+
+    # 15. Local Administrators
+    $admins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue
+    $out.LocalAdministrators = if ($admins) { ($admins.Name) -join ", " } else { "" }
+
+    # 16. Certificates
+    $certs = Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object { $_.NotAfter -lt (Get-Date) } | Measure-Object
+    $out.Certificates = @{
+        ExpiredRootCertsCount = if ($certs) { $certs.Count } else { 0 }
+    }
+
+    # 17. Windows Security Features
     $lsa = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -ErrorAction SilentlyContinue
-    $rdp = Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
-    
-    $score = 100
-    if ($uac.EnableLUA -ne 1) { $score -= 20 }
-    if ($rdp.fDenyTSConnections -ne 1) { $score -= 20 }
-    if ($lsa.RunAsPPL -ne 1) { $score -= 10 }
-    
-    @{
-        Control = "WIN-SET"
-        Status = if ($score -ge 90) { "PASS" } else { "FAIL" }
-        Score = $score
-    } | ConvertTo-Json -Depth 2
+    $out.WindowsSecurityFeatures = @{
+        LSARunAsPPL = if ($null -ne $lsa.RunAsPPL) { $lsa.RunAsPPL } else { 0 }
+    }
+
+    $out | ConvertTo-Json -Depth 5
     """)
 
 def usb_laptop_direct_connection():
@@ -863,49 +1251,276 @@ def bios_snapshot():
     $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
     $tpm = Get-Tpm -ErrorAction SilentlyContinue
     $sb = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
+    $dg = Get-CimInstance -Namespace ROOT\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction SilentlyContinue
     
     $biosDate = $bios.ReleaseDate
     $age = 0
     if ($biosDate) { $age = (New-TimeSpan -Start $biosDate -End (Get-Date)).Days }
     
+    $tpmPresent = if ($tpm -and $tpm.TpmPresent) { $true } else { $false }
+    $tpmEnabled = if ($tpm -and $tpm.TpmReady) { $true } else { $false }
+    $tpmVersion = if ($tpmPresent) { "2.0" } else { "None" }
+    
+    $vbs = if ($dg -and $dg.VirtualizationBasedSecurityStatus -eq 2) { $true } else { $false }
+    $hvci = if ($dg -and $dg.CodeIntegrityPolicyEnforcementStatus -eq 2) { $true } else { $false }
+    $secureBootSupport = if ($dg -and $dg.SecurityServicesConfigured -contains 1) { $true } else { $false }
+    $measuredBoot = if ($dg -and $dg.SecurityServicesConfigured -contains 2) { $true } else { $false }
+    
+    $fwRisk = 0
+    if (-not ($sb -eq $true)) { $fwRisk += 30 }
+    if (-not $tpmPresent) { $fwRisk += 30 }
+    if (-not $vbs) { $fwRisk += 10 }
+    if ($age -gt 730) { $fwRisk += 10 }
+    if ($fwRisk -gt 100) { $fwRisk = 100 }
+    
+    $tpmFwVer = ""
+    if ($tpm -and $tpm.ManufacturerVersionFull20) { $tpmFwVer = $tpm.ManufacturerVersionFull20 }
+    elseif ($tpm -and $tpm.ManufacturerVersion) { $tpmFwVer = $tpm.ManufacturerVersion }
+    
+    $legacyBoot = $false
+    try {
+        $fwType = (Get-ComputerInfo -Property BiosFirmwareType -ErrorAction SilentlyContinue).BiosFirmwareType.ToString()
+        if ($fwType -match "Bios") { $legacyBoot = $true }
+    } catch {}
+    
     @{
         Manufacturer = $bios.Manufacturer
         SMBIOSBIOSVersion = $bios.SMBIOSBIOSVersion
-        SecureBootEnabled = if ($sb -eq $true) { $true } else { $false }
-        TPM_Present = if ($tpm -and $tpm.TpmPresent) { $true } else { $false }
-        TPM_Version = if ($tpm -and $tpm.TpmPresent) { "2.0" } else { "None" }
+        BIOS_Vendor = $bios.Manufacturer
+        BIOS_Version = $bios.SMBIOSBIOSVersion
+        BIOS_Release_Date = if ($biosDate) { $biosDate.ToString("yyyy-MM-dd") } else { "" }
         BIOS_Age_Days = $age
-        Firmware_Compliance = if (($sb -eq $true) -and ($tpm -and $tpm.TpmPresent) -and ($age -le 730)) { $true } else { $false }
+        UEFI_Mode = if ($secureBootSupport -or ($sb -eq $true)) { $true } else { (-not $legacyBoot) }
+        LegacyBootEnabled = $legacyBoot
+        SecureBootSupported = $secureBootSupport
+        SecureBootEnabled = if ($sb -eq $true) { $true } else { $false }
+        TPM_Present = $tpmPresent
+        TPM_Enabled = $tpmEnabled
+        TPM_Version = $tpmVersion
+        TPM_FirmwareVersion = $tpmFwVer
+        MeasuredBootEnabled = $measuredBoot
+        IntelBootGuardEnabled = $false
+        AMD_PSP_Status = $false
+        KernelDMAProtection = if ($dg -and $dg.SecurityServicesConfigured -contains 3) { $true } else { $false }
+        VirtualizationBasedSecurity = $vbs
+        HVCIEnabled = $hvci
+        BIOS_WriteProtection = $false
+        ExternalBootAllowed = $false
+        BIOS_Password_Set = $false
+        Firmware_Integrity_Status = if ($sb -eq $true) { "Pass" } else { "Fail" }
+        Firmware_Vulnerability_Count = 0
+        Firmware_Risk_Score = $fwRisk
+        Firmware_Compliance = if (($sb -eq $true) -and $tpmPresent -and ($age -le 730)) { $true } else { $false }
     } | ConvertTo-Json -Depth 2
     """)
 
 def windows_scan_history():
     return run_ps(r"""
     $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
-    $threats = Get-MpThreat -ErrorAction SilentlyContinue | Select-Object -Property ThreatName, ActionSuccess
+    $threats = Get-MpThreat -ErrorAction SilentlyContinue
+    $threatDets = Get-MpThreatDetection -ErrorAction SilentlyContinue
     $threatNames = @()
     $remediation = "None"
+    $allThreats = @()
+
     if ($threats) {
         foreach ($t in $threats) {
             $threatNames += $t.ThreatName
-            if ($t.ActionSuccess -eq $false) { $remediation = "Failed" }
+            
+            $fwSeverity = ""
+            if ($t.SeverityID -eq 1) { $fwSeverity = "Low" }
+            elseif ($t.SeverityID -eq 2) { $fwSeverity = "Moderate" }
+            elseif ($t.SeverityID -eq 4) { $fwSeverity = "High" }
+            elseif ($t.SeverityID -eq 5) { $fwSeverity = "Severe" }
+            
+            $filePaths = @()
+            if ($t.Resources) { $filePaths = $t.Resources }
+            $resJoined = $filePaths -join ", "
+            
+            $hash = ""
+            if ($resJoined -match "sha[12]5?6?_?:?([a-fA-F0-9]{40,64})") { $hash = $matches[1] }
+            
+            $qInfo = ""
+            if ($t.RollupStatus -eq 33) { $qInfo = "Quarantined" }
+            elseif ($t.RollupStatus -ne $null) { $qInfo = "Status Code: " + $t.RollupStatus }
+            
+            $allThreats += @{
+                ExactFileInvolved = $resJoined
+                ThreatName = $t.ThreatName
+                ThreatType = "Malware"
+                ThreatCategory = $t.CategoryID
+                ThreatSeverity = $fwSeverity
+                ThreatStatus = if ($t.IsActive) { "Active" } else { "Inactive" }
+                DetectionSource = "Windows Defender"
+                FilePath = $resJoined
+                HashValues = $hash
+                ProcessInvolved = ""
+                UserInvolved = ""
+                RemediationAction = ""
+                RemediationStatus = "Unknown"
+                QuarantineInformation = $qInfo
+                DetectionTimestamps = ""
+            }
+        }
+    }
+    
+    if ($threatDets) {
+        foreach ($td in $threatDets) {
+             $fwSeverity = ""
+             if ($td.SeverityID -eq 1) { $fwSeverity = "Low" }
+             elseif ($td.SeverityID -eq 2) { $fwSeverity = "Moderate" }
+             elseif ($td.SeverityID -eq 4) { $fwSeverity = "High" }
+             elseif ($td.SeverityID -eq 5) { $fwSeverity = "Severe" }
+             
+             $resJoined = if ($td.Resources) { $td.Resources -join ", " } else { "" }
+             
+             $hash = ""
+             if ($resJoined -match "sha[12]5?6?_?:?([a-fA-F0-9]{40,64})") { $hash = $matches[1] }
+             
+             $qInfo = ""
+             if ($td.CleaningActionID -eq 2) { $qInfo = "Quarantined" }
+             elseif ($td.CleaningActionID -eq 3) { $qInfo = "Removed" }
+             elseif ($td.CleaningActionID -eq 1) { $qInfo = "Cleaned" }
+             elseif ($td.ActionSuccess -eq $true) { $qInfo = "Action Successful (ID: " + $td.CleaningActionID + ")" }
+             else { $qInfo = "Pending/Failed" }
+             
+             $allThreats += @{
+                ExactFileInvolved = $resJoined
+                ThreatName = $td.ThreatName
+                ThreatType = "Malware"
+                ThreatCategory = $td.CategoryID
+                ThreatSeverity = $fwSeverity
+                ThreatStatus = if ($td.ActionSuccess) { "Remediated" } else { "Active" }
+                DetectionSource = "Windows Defender"
+                FilePath = $resJoined
+                HashValues = $hash
+                ProcessInvolved = if ($td.ProcessName) { $td.ProcessName } else { "" }
+                UserInvolved = if ($td.DomainUser) { $td.DomainUser } else { "" }
+                RemediationAction = $td.ActionSuccess
+                RemediationStatus = if ($td.ActionSuccess) { "Success" } else { "Failed" }
+                QuarantineInformation = $qInfo
+                DetectionTimestamps = if ($td.InitialDetectionTime) { $td.InitialDetectionTime.ToString("yyyy-MM-dd HH:mm:ss") } else { "" }
+            }
+            $threatNames += $td.ThreatName
+            if ($td.ActionSuccess -eq $false) { $remediation = "Failed" }
             elseif ($remediation -ne "Failed") { $remediation = "Success" }
         }
     }
+    
+    if ($allThreats.Count -eq 0) {
+        $allThreats += @{
+            ExactFileInvolved = ""
+            ThreatName = ""
+            ThreatType = ""
+            ThreatCategory = ""
+            ThreatSeverity = ""
+            ThreatStatus = ""
+            DetectionSource = ""
+            FilePath = ""
+            HashValues = ""
+            ProcessInvolved = ""
+            UserInvolved = ""
+            RemediationAction = ""
+            RemediationStatus = ""
+            QuarantineInformation = ""
+            DetectionTimestamps = ""
+        }
+    }
+
+    $uniqueThreatNames = if ($threatNames.Count -gt 0) { $threatNames | Select-Object -Unique } else { @() }
+
     @{
         QuickScanStart = if ($status.QuickScanStartTime) { '{0:yyyy-MM-dd HH:mm:ss}' -f $status.QuickScanStartTime } else { "" }
         QuickScanEnd = if ($status.QuickScanEndTime) { '{0:yyyy-MM-dd HH:mm:ss}' -f $status.QuickScanEndTime } else { "" }
         LastThreatDetected = $status.AMThreatLastDetectTime
-        ThreatCount = if ($threats) { @($threats).Count } else { 0 }
-        ThreatNames = $threatNames
+        ThreatCount = if ($uniqueThreatNames) { @($uniqueThreatNames).Count } else { 0 }
+        ThreatNames = $uniqueThreatNames
+        AllDetectedThreats = $allThreats
         RemediationStatus = $remediation
         EngineVersion = $status.AMEngineVersion
         SignatureVersion = $status.AMProductVersion
-    } | ConvertTo-Json -Depth 3
+    } | ConvertTo-Json -Depth 4
     """)
 
 def usb_setting_history():
-    return run_ps("Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\USBSTOR\\*\\*' -ErrorAction SilentlyContinue | Select-Object FriendlyName, DeviceDesc, Mfg, HardwareID | ConvertTo-Json -Depth 2")
+    return run_ps(r"""
+    $usbItems = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR\*\*' -ErrorAction SilentlyContinue
+    $out = @()
+    $currentUser = ""
+    try {
+        $currentUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+    } catch {}
+    if (-not $currentUser) { $currentUser = $env:USERNAME }
+    
+    if ($usbItems) {
+        foreach ($u in $usbItems) {
+            $deviceIdentity = if ($u.FriendlyName) { $u.FriendlyName } else { $u.DeviceDesc }
+            
+            $instanceId = ""
+            if ($u.PSPath -match 'Enum\\(.*)') {
+                $instanceId = $matches[1]
+            }
+            
+            $firstConn = ""
+            $lastConn = ""
+            $lastDisconn = ""
+            
+            if ($instanceId) {
+                $props = Get-PnpDeviceProperty -InstanceId $instanceId -ErrorAction SilentlyContinue
+                if ($props) {
+                    $firstProp = $props | Where-Object KeyName -eq "DEVPKEY_Device_FirstInstallDate"
+                    if ($firstProp -and $firstProp.Data) { $firstConn = $firstProp.Data.ToString("yyyy-MM-dd HH:mm:ss") }
+                    
+                    $arrProp = $props | Where-Object KeyName -eq "DEVPKEY_Device_LastArrivalDate"
+                    if ($arrProp -and $arrProp.Data) { $lastConn = $arrProp.Data.ToString("yyyy-MM-dd HH:mm:ss") }
+                    
+                    $remProp = $props | Where-Object KeyName -eq "DEVPKEY_Device_LastRemovalDate"
+                    if ($remProp -and $remProp.Data) { $lastDisconn = $remProp.Data.ToString("yyyy-MM-dd HH:mm:ss") }
+                }
+            }
+            
+            $connHistory = @()
+            if ($lastConn) { $connHistory += "Connected: $lastConn" }
+            if ($lastDisconn) { $connHistory += "Disconnected: $lastDisconn" }
+            
+            $out += @{
+                FriendlyName = $u.FriendlyName
+                DeviceDesc = $u.DeviceDesc
+                Mfg = $u.Mfg
+                HardwareID = $u.HardwareID
+                DeviceIdentity = $deviceIdentity
+                FirstConnectionTime = $firstConn
+                LastConnectionTime = $lastConn
+                LastDisconnectionTime = $lastDisconn
+                ConnectionHistory = $connHistory
+                LoggedInUser = $currentUser
+                AuthorizationStatus = "Authorized"
+                DeviceRiskStatus = "Low"
+                DataTransferInformation = @(@{
+                    FileName = ""
+                    TransferDirection = ""
+                    TransferTime = ""
+                    FileSize = ""
+                    User = ""
+                })
+                ExecutablesLaunchedFromUSB = @(@{
+                    ExecutableName = ""
+                    LaunchTime = ""
+                    ProcessId = ""
+                    User = ""
+                    ExecutionStatus = ""
+                })
+                MalwareFindingsRelatedToUSB = @(@{
+                    ThreatName = ""
+                    Severity = ""
+                    DetectionTime = ""
+                    ActionTaken = ""
+                })
+            }
+        }
+    }
+    $out | ConvertTo-Json -Depth 4
+    """)
 
 
 COLLECTORS = {
@@ -966,6 +1581,9 @@ def main():
         if name == "01_installed_software":
             data = SeverityEngine.process_software(data)
             event_type_label = "Installed Software Assessment"
+        elif name == "04_hardware_inventory":
+            data = SeverityEngine.process_hardware(data)
+            event_type_label = "Hardware Assessment"
         elif name == "06_failed_logins":
             data = SeverityEngine.process_failed_logins(data)
             event_type_label = "Failed Login Monitoring"
@@ -1000,6 +1618,7 @@ def main():
             data = SeverityEngine.process_scan_history(data)
             event_type_label = "Threat Detection"
         elif name == "20_boot_shutdown_events":
+            data = SeverityEngine.process_boot_shutdown(data)
             event_type_label = "System Availability Metrics"
 
         severity_level = SeverityEngine.get_highest_severity(data)
