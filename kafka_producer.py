@@ -93,6 +93,16 @@ def normalize_stdout(stdout):
     return []
 
 
+def get_severity_priority(severity):
+    s = str(severity).upper()
+    if s == "CRITICAL": return 1
+    if s == "WARNING": return 2
+    if s == "STATISTICAL": return 3
+    if s == "INVESTIGATIVE": return 4
+    return 5
+
+all_payloads = []
+
 for file in sorted(OUTPUT_DIR.glob("*.json")):
 
     try:
@@ -184,26 +194,43 @@ for file in sorted(OUTPUT_DIR.glob("*.json")):
                     "record": record
                 }
 
-                producer.send(
-                    "compliance-data",
-                    value=kafka_payload
-                )
-
-                print(
-                    f"[SENT] "
-                    f"{file.name} "
-                    f"{idx}/{total}"
-                )
-
-                producer.flush()
-
-                time.sleep(0.03)
+                all_payloads.append(kafka_payload)
 
     except Exception as e:
+        print(f"[ERROR] {file.name}: {e}")
 
-        print(
-            f"[ERROR] "
-            f"{file.name}: {e}"
-        )
+# Phase 2: Deduplication
+seen_hashes = set()
+unique_payloads = []
+
+for payload in all_payloads:
+    unique_id = {
+        "file_name": payload.get("file_name", ""),
+        "event_id": payload.get("event_id", ""),
+        "timestamp": payload.get("timestamp", ""),
+        "record": payload.get("record", {})
+    }
+    unique_hash = json.dumps(unique_id, sort_keys=True, default=str)
+    
+    if unique_hash not in seen_hashes:
+        seen_hashes.add(unique_hash)
+        unique_payloads.append(payload)
+
+# Phase 3: Priority Sorting (Severity)
+unique_payloads.sort(key=lambda x: get_severity_priority(x.get("severity", "")))
+
+# Phase 4: Efficient Sending
+total = len(unique_payloads)
+for idx, payload in enumerate(unique_payloads, start=1):
+    producer.send("compliance-data", value=payload)
+    
+    print(f"[SENT] {payload['file_name']} {idx}/{total} - {payload['severity']}")
+    
+    # Tiny sleep every 50 messages to not completely choke the network, but much faster than before
+    if idx % 50 == 0:
+        time.sleep(0.01)
+
+# Single flush at the end for maximum efficiency
+producer.flush()
 
 print("\nALL LOGS SENT")
