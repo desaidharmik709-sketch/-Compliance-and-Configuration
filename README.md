@@ -170,13 +170,6 @@ Each record receives three additional fields from `SeverityEngine`:
 
 ---
 
-## Compliance Frameworks
-
-| Framework | Coverage |
-|-----------|----------|
-| **NIST SP 800-53** | CM-7/8, AC-2/3/7/17, AU-2, SC-7/28, SI-3/7, MP-7, CP-10 |
-| **PCI DSS v4.0** | 1.3, 5.1/5.2, 6.3, 8.1/8.3, 9.9, 10.2/10.3, 11.5, 12.8 |
-| **Internal (Deepcytes)** | ENDPOINT, HARDWARE, SYSTEM categories |
 
 ---
 
@@ -190,10 +183,6 @@ psutil
 Windows       10/11  (collector must run on Windows endpoint)
 ```
 
-Optional:
-```
-Wazuh agent   (Windows 11 Home confirmed Active)
-Docker        (for Wazuh on Kali Linux)
 ```
 
 ---
